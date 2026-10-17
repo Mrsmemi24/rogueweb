@@ -53,7 +53,10 @@ interface ServerToClientEvents {
   "app:error": (payload: { message: string }) => void;
 }
 
-interface InterServerEvents {}
+type InterServerEvents = Record<
+  string,
+  (...args: never[]) => void
+>;
 
 interface SocketData {
   roomId?: string;

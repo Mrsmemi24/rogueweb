@@ -36,6 +36,7 @@ export default function LobbyPanel() {
   );
 
   const [connected, setConnected] = useState(false);
+  const [socketId, setSocketId] = useState("");
   const [roomId, setRoomId] = useState("mazmorra-1");
   const [playerName, setPlayerName] = useState("Explorador");
   const [lobby, setLobby] = useState<LobbyState | null>(null);
@@ -56,6 +57,7 @@ export default function LobbyPanel() {
 
     const handleConnect = () => {
       setConnected(true);
+      setSocketId(socket.id ?? "");
       setError("");
 
       if (joinedRoomRef.current) {
@@ -65,13 +67,19 @@ export default function LobbyPanel() {
 
     const handleDisconnect = (reason: string) => {
       setConnected(false);
+      setSocketId("");
       setLobby(null);
       console.warn(`Lobby server disconnected (${reason}); reconnecting.`);
       setError("Conexión perdida. Intentando reconectar con el servidor...");
+
+      if (reason === "io server disconnect") {
+        socket.connect();
+      }
     };
 
     const handleConnectError = (cause: Error) => {
       setConnected(false);
+      setSocketId("");
       console.error(
         `Could not connect to the lobby server at ${SOCKET_URL}:`,
         cause
@@ -83,10 +91,6 @@ export default function LobbyPanel() {
 
     const handleLobbyState = (state: LobbyState) => {
       setLobby(state);
-      joinedRoomRef.current = {
-        roomId: state.roomId,
-        playerName: joinedRoomRef.current?.playerName ?? playerName,
-      };
       setError("");
     };
 
@@ -131,7 +135,7 @@ export default function LobbyPanel() {
   };
 
   const currentPlayer = lobby?.players.find(
-    (player) => player.id === socketRef.current?.id
+    (player) => player.id === socketId
   );
 
   const toggleReady = () => {
@@ -228,7 +232,7 @@ export default function LobbyPanel() {
               >
                 <span className="truncate">
                   {player.name}
-                  {player.id === socketRef.current?.id ? " (tú)" : ""}
+                  {player.id === socketId ? " (tú)" : ""}
                 </span>
 
                 <span

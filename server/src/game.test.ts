@@ -1,12 +1,15 @@
 import { describe, expect, it } from "vitest";
 import {
+  AttackIntentSchema,
   createPlayer,
+  createRoomState,
   findAvailableSpawn,
   getOrCreateRoom,
   JoinRoomSchema,
   MoveIntentSchema,
   toPublicGameState,
   toPublicPlayerState,
+  tryAttackPlayer,
   tryMovePlayer,
   updatePlayerHealth,
   type RoomState,
@@ -24,7 +27,26 @@ function createRoom(seed = 42): RoomState {
       ],
     },
     players: new Map(),
+    enemies: [],
   };
+}
+
+function addEnemy(room: RoomState, id = "sentinel-test") {
+  const enemy = {
+    id,
+    name: "Centinela nivel 1",
+    x: 2,
+    y: 1,
+    hp: 36,
+    maxHp: 36,
+    damage: 7,
+    defense: 0,
+    xpReward: 75,
+    status: "alive" as const,
+  };
+
+  room.enemies.push(enemy);
+  return enemy;
 }
 
 describe("authoritative multiplayer room state", () => {
@@ -37,8 +59,11 @@ describe("authoritative multiplayer room state", () => {
       y: 1,
       hp: 100,
       maxHp: 100,
+      attack: 18,
+      defense: 3,
       level: 1,
       xp: 0,
+      enemiesDefeated: 0,
       status: "alive",
     });
   });
@@ -96,6 +121,7 @@ describe("authoritative multiplayer room state", () => {
       maxHp: 100,
       level: 1,
       xp: 0,
+      enemiesDefeated: 0,
       status: "alive",
     });
     expect(toPublicGameState("alpha", room)).toEqual({
@@ -113,9 +139,11 @@ describe("authoritative multiplayer room state", () => {
           maxHp: 100,
           level: 1,
           xp: 0,
+          enemiesDefeated: 0,
           status: "alive",
         },
       ],
+      enemies: [],
     });
   });
 
@@ -145,6 +173,181 @@ describe("authoritative multiplayer room state", () => {
     expect(findAvailableSpawn(room)).toEqual({ x: 2, y: 1 });
     room.players.set("p2", createPlayer("p2", "Two", { x: 2, y: 1 }));
     expect(findAvailableSpawn(room)).toBeUndefined();
+  });
+
+  it("creates deterministic enemies on free walkable dungeon tiles", () => {
+    const first = createRoomState(42);
+    const second = createRoomState(42);
+    const excluded = new Set(
+      [
+        ...first.dungeon.spawns,
+        first.dungeon.exit,
+      ].map(({ x, y }) => `${x},${y}`)
+    );
+    const enemyPositions = new Set<string>();
+
+    expect(first.enemies).toHaveLength(3);
+    expect(first.enemies).toEqual(second.enemies);
+
+    for (const enemy of first.enemies) {
+      const position = `${enemy.x},${enemy.y}`;
+
+      expect(first.dungeon.map[enemy.y][enemy.x]).toBe(".");
+      expect(excluded.has(position)).toBe(false);
+      expect(enemyPositions.has(position)).toBe(false);
+      expect(enemy).toMatchObject({
+        hp: 36,
+        maxHp: 36,
+        damage: 7,
+        defense: 0,
+        xpReward: 75,
+        status: "alive",
+      });
+      enemyPositions.add(position);
+    }
+  });
+
+  it("spawns room enemies independently from players and other enemies", () => {
+    const room = createRoomState(84);
+    const spawn = room.dungeon.spawns[0];
+    const player = createPlayer("p1", "One", spawn);
+    room.players.set(player.id, player);
+
+    expect(
+      room.enemies.some(
+        (enemy) => enemy.x === player.x && enemy.y === player.y
+      )
+    ).toBe(false);
+    expect(
+      new Set(room.enemies.map(({ x, y }) => `${x},${y}`)).size
+    ).toBe(room.enemies.length);
+  });
+
+  it("damages only an adjacent enemy in the requested direction", () => {
+    const room = createRoom();
+    const player = createPlayer("p1", "One", { x: 1, y: 1 });
+    const enemy = addEnemy(room);
+    room.players.set(player.id, player);
+
+    expect(tryAttackPlayer(room, player.id, "right")).toEqual({
+      ok: true,
+      damage: 18,
+      defeated: false,
+    });
+    expect(enemy.hp).toBe(18);
+  });
+
+  it("rejects attacks from a distance and invalid directions", () => {
+    const room = createRoom();
+    const player = createPlayer("p1", "One", { x: 1, y: 1 });
+    const enemy = addEnemy(room);
+    enemy.x = 3;
+    room.players.set(player.id, player);
+
+    expect(tryAttackPlayer(room, player.id, "right")).toEqual({
+      ok: false,
+      reason: "no-enemy",
+    });
+    expect(tryAttackPlayer(room, player.id, "teleport")).toEqual({
+      ok: false,
+      reason: "invalid-direction",
+    });
+    expect(enemy.hp).toBe(36);
+  });
+
+  it("rejects attacks from defeated or missing players", () => {
+    const room = createRoom();
+    const player = createPlayer("p1", "One", { x: 1, y: 1 });
+    addEnemy(room);
+    room.players.set(player.id, player);
+    updatePlayerHealth(room, player.id, 0);
+
+    expect(tryAttackPlayer(room, player.id, "right")).toEqual({
+      ok: false,
+      reason: "defeated",
+    });
+    expect(tryAttackPlayer(room, "absent", "right")).toEqual({
+      ok: false,
+      reason: "player-not-found",
+    });
+  });
+
+  it("clamps enemy HP and awards XP and kills once when defeated", () => {
+    const room = createRoom();
+    const player = createPlayer("p1", "One", { x: 1, y: 1 });
+    const enemy = addEnemy(room);
+    room.players.set(player.id, player);
+    player.attack = 1000;
+
+    expect(tryAttackPlayer(room, player.id, "right")).toEqual({
+      ok: true,
+      damage: 1000,
+      defeated: true,
+    });
+    expect(enemy).toMatchObject({ hp: 0, status: "defeated" });
+    expect(player).toMatchObject({ xp: 75, enemiesDefeated: 1 });
+
+    expect(tryAttackPlayer(room, player.id, "right")).toEqual({
+      ok: false,
+      reason: "no-enemy",
+    });
+    expect(enemy.hp).toBe(0);
+    expect(player).toMatchObject({ xp: 75, enemiesDefeated: 1 });
+  });
+
+  it("rejects client-provided damage, target HP, and arbitrary targets", () => {
+    expect(AttackIntentSchema.safeParse({ direction: "right" }).success).toBe(
+      true
+    );
+    expect(
+      AttackIntentSchema.safeParse({
+        direction: "right",
+        damage: 999999,
+      }).success
+    ).toBe(false);
+    expect(
+      AttackIntentSchema.safeParse({
+        direction: "right",
+        targetHp: 0,
+        targetId: "sentinel-test",
+      }).success
+    ).toBe(false);
+
+    const room = createRoom();
+    const player = createPlayer("p1", "One", { x: 1, y: 1 });
+    const enemy = addEnemy(room);
+    room.players.set(player.id, player);
+
+    expect(tryAttackPlayer(room, player.id, "right")).toMatchObject({
+      ok: true,
+      damage: 18,
+    });
+    expect(enemy.hp).toBe(18);
+  });
+
+  it("serializes enemy combat state without server-only combat values", () => {
+    const room = createRoom();
+    addEnemy(room);
+    const player = createPlayer("p1", "One", { x: 1, y: 1 });
+    room.players.set(player.id, player);
+
+    expect(toPublicGameState("alpha", room).enemies).toEqual([
+      {
+        id: "sentinel-test",
+        name: "Centinela nivel 1",
+        x: 2,
+        y: 1,
+        hp: 36,
+        maxHp: 36,
+        status: "alive",
+      },
+    ]);
+    expect(toPublicGameState("alpha", room).enemies[0]).not.toHaveProperty(
+      "damage"
+    );
+    expect(toPublicGameState("alpha", room).enemies[0]).not.toHaveProperty(
+      "xpReward"
+    );
   });
 
   it("moves a player one valid step and mutates only server state", () => {
@@ -190,6 +393,18 @@ describe("authoritative multiplayer room state", () => {
       ok: false,
       reason: "invalid-direction",
     });
+  });
+
+  it("prevents movement into a living enemy", () => {
+    const room = createRoom();
+    room.players.set("p1", createPlayer("p1", "One", { x: 1, y: 1 }));
+    addEnemy(room);
+
+    expect(tryMovePlayer(room, "p1", "right")).toEqual({
+      ok: false,
+      reason: "enemy-occupied",
+    });
+    expect(room.players.get("p1")).toMatchObject({ x: 1, y: 1 });
   });
 
   it("prevents defeated players from moving", () => {

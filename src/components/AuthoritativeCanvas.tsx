@@ -18,6 +18,16 @@ type GamePlayer = {
   status: "alive" | "defeated";
 };
 
+type GameEnemy = {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  hp: number;
+  maxHp: number;
+  status: "alive" | "defeated";
+};
+
 type GameState = {
   roomId: string;
   seed: number;
@@ -27,15 +37,22 @@ type GameState = {
     y: number;
   };
   players: GamePlayer[];
+  enemies: GameEnemy[];
 };
 
 type Props = {
   gameState: GameState | null;
   currentPlayerId?: string;
   onMove: (direction: Direction) => void;
+  onAttack: () => void;
 };
 
 type PlayerView = {
+  body: Phaser.GameObjects.Rectangle;
+  label: Phaser.GameObjects.Text;
+};
+
+type EnemyView = {
   body: Phaser.GameObjects.Rectangle;
   label: Phaser.GameObjects.Text;
 };
@@ -44,18 +61,21 @@ export default function AuthoritativeCanvas({
   gameState,
   currentPlayerId,
   onMove,
+  onAttack,
 }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
 
   const gameStateRef = useRef<GameState | null>(gameState);
   const playerIdRef = useRef(currentPlayerId);
   const onMoveRef = useRef(onMove);
+  const onAttackRef = useRef(onAttack);
 
   useEffect(() => {
     gameStateRef.current = gameState;
     playerIdRef.current = currentPlayerId;
     onMoveRef.current = onMove;
-  }, [gameState, currentPlayerId, onMove]);
+    onAttackRef.current = onAttack;
+  }, [gameState, currentPlayerId, onMove, onAttack]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -68,8 +88,12 @@ export default function AuthoritativeCanvas({
 
       private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
       private wasd?: Record<string, Phaser.Input.Keyboard.Key>;
+      private attackKey?: Phaser.Input.Keyboard.Key;
+      private lastMoveDirection?: Direction;
+      private lastMoveAt = 0;
 
       private playerViews = new Map<string, PlayerView>();
+      private enemyViews = new Map<string, EnemyView>();
 
       private lastState: GameState | null | undefined;
       private mapSignature = "";
@@ -77,6 +101,26 @@ export default function AuthoritativeCanvas({
       private tileSize = 32;
       private offsetX = 0;
       private offsetY = 0;
+
+      private handleFocusLoss = () => {
+        this.input.keyboard?.resetKeys();
+        this.lastMoveDirection = undefined;
+        this.lastMoveAt = 0;
+      };
+
+      private handleVisibilityChange = () => {
+        if (document.hidden) {
+          this.handleFocusLoss();
+        }
+      };
+
+      private removeInputListeners = () => {
+        window.removeEventListener("blur", this.handleFocusLoss);
+        document.removeEventListener(
+          "visibilitychange",
+          this.handleVisibilityChange
+        );
+      };
 
       constructor() {
         super("AuthoritativeScene");
@@ -100,6 +144,9 @@ export default function AuthoritativeCanvas({
             down: Phaser.Input.Keyboard.KeyCodes.S,
             right: Phaser.Input.Keyboard.KeyCodes.D,
           }) as Record<string, Phaser.Input.Keyboard.Key>;
+          this.attackKey = keyboard.addKey(
+            Phaser.Input.Keyboard.KeyCodes.SPACE
+          );
 
           keyboard.addCapture([
             Phaser.Input.Keyboard.KeyCodes.UP,
@@ -110,6 +157,7 @@ export default function AuthoritativeCanvas({
             Phaser.Input.Keyboard.KeyCodes.A,
             Phaser.Input.Keyboard.KeyCodes.S,
             Phaser.Input.Keyboard.KeyCodes.D,
+            Phaser.Input.Keyboard.KeyCodes.SPACE,
           ]);
         }
 
@@ -117,6 +165,19 @@ export default function AuthoritativeCanvas({
           Phaser.Scale.Events.RESIZE,
           this.handleResize,
           this
+        );
+        window.addEventListener("blur", this.handleFocusLoss);
+        document.addEventListener(
+          "visibilitychange",
+          this.handleVisibilityChange
+        );
+        this.events.once(
+          Phaser.Scenes.Events.SHUTDOWN,
+          this.removeInputListeners
+        );
+        this.events.once(
+          Phaser.Scenes.Events.DESTROY,
+          this.removeInputListeners
         );
 
         this.renderState();
@@ -131,36 +192,56 @@ export default function AuthoritativeCanvas({
           this.renderState();
         }
 
-        if (!state || !this.cursors || !this.wasd) {
+        if (!state) {
+          this.lastMoveDirection = undefined;
+          this.lastMoveAt = 0;
           return;
         }
 
-        const left =
-          Phaser.Input.Keyboard.JustDown(this.cursors.left) ||
-          Phaser.Input.Keyboard.JustDown(this.wasd.left);
+        if (
+          document.hidden ||
+          (document.activeElement instanceof HTMLElement &&
+            document.activeElement.isContentEditable) ||
+          document.activeElement instanceof HTMLInputElement ||
+          document.activeElement instanceof HTMLTextAreaElement
+        ) {
+          this.handleFocusLoss();
+          return;
+        }
 
-        const right =
-          Phaser.Input.Keyboard.JustDown(this.cursors.right) ||
-          Phaser.Input.Keyboard.JustDown(this.wasd.right);
+        if (
+          this.attackKey &&
+          Phaser.Input.Keyboard.JustDown(this.attackKey)
+        ) {
+          onAttackRef.current();
+          return;
+        }
 
-        const up =
-          Phaser.Input.Keyboard.JustDown(this.cursors.up) ||
-          Phaser.Input.Keyboard.JustDown(this.wasd.up);
+        if (!this.cursors || !this.wasd) return;
 
-        const down =
-          Phaser.Input.Keyboard.JustDown(this.cursors.down) ||
-          Phaser.Input.Keyboard.JustDown(this.wasd.down);
+        const direction: Direction | undefined =
+          this.cursors.left.isDown || this.wasd.left.isDown
+            ? "left"
+            : this.cursors.right.isDown || this.wasd.right.isDown
+              ? "right"
+              : this.cursors.up.isDown || this.wasd.up.isDown
+                ? "up"
+                : this.cursors.down.isDown || this.wasd.down.isDown
+                  ? "down"
+                  : undefined;
 
         // Enviamos una intención de movimiento.
         // El jugador NO cambia de coordenadas aquí.
-        if (left) {
-          onMoveRef.current("left");
-        } else if (right) {
-          onMoveRef.current("right");
-        } else if (up) {
-          onMoveRef.current("up");
-        } else if (down) {
-          onMoveRef.current("down");
+        if (!direction) {
+          this.lastMoveDirection = undefined;
+          this.lastMoveAt = 0;
+        } else if (
+          direction !== this.lastMoveDirection ||
+          this.time.now - this.lastMoveAt >= 180
+        ) {
+          onMoveRef.current(direction);
+          this.lastMoveDirection = direction;
+          this.lastMoveAt = this.time.now;
         }
       }
 
@@ -180,6 +261,13 @@ export default function AuthoritativeCanvas({
           }
 
           this.playerViews.clear();
+
+          for (const view of this.enemyViews.values()) {
+            view.body.destroy();
+            view.label.destroy();
+          }
+
+          this.enemyViews.clear();
           return;
         }
 
@@ -231,6 +319,62 @@ export default function AuthoritativeCanvas({
           )
           .setSize(this.tileSize * 0.55, this.tileSize * 0.55)
           .setVisible(true);
+
+        const enemyIds = new Set(
+          state.enemies.map((enemy) => enemy.id)
+        );
+
+        for (const [id, view] of this.enemyViews) {
+          if (!enemyIds.has(id)) {
+            view.body.destroy();
+            view.label.destroy();
+            this.enemyViews.delete(id);
+          }
+        }
+
+        for (const enemy of state.enemies) {
+          let view = this.enemyViews.get(enemy.id);
+
+          if (!view) {
+            const body = this.add
+              .rectangle(0, 0, this.tileSize * 0.55, this.tileSize * 0.55, 0xf87171)
+              .setDepth(2);
+            const label = this.add
+              .text(0, 0, "", {
+                fontFamily: "monospace",
+                fontSize: "10px",
+                color: "#ffffff",
+                backgroundColor: "#7f1d1d",
+                padding: { x: 2, y: 1 },
+              })
+              .setOrigin(0.5, 1)
+              .setDepth(3);
+
+            view = { body, label };
+            this.enemyViews.set(enemy.id, view);
+          }
+
+          const centerX =
+            this.offsetX +
+            enemy.x * this.tileSize +
+            this.tileSize / 2;
+          const centerY =
+            this.offsetY +
+            enemy.y * this.tileSize +
+            this.tileSize / 2;
+          const defeated = enemy.status === "defeated";
+
+          view.body
+            .setPosition(centerX, centerY)
+            .setSize(this.tileSize * 0.55, this.tileSize * 0.55)
+            .setFillStyle(defeated ? 0x64748b : 0xf87171);
+
+          view.label
+            .setText(defeated ? "Derrotado" : `${enemy.hp}/${enemy.maxHp}`)
+            .setFontSize(Math.max(8, Math.floor(this.tileSize * 0.22)))
+            .setPosition(centerX, centerY - this.tileSize * 0.4)
+            .setBackgroundColor(defeated ? "#334155" : "#7f1d1d");
+        }
 
         const activeIds = new Set(
           state.players.map((player) => player.id)

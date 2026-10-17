@@ -1,6 +1,12 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import dynamic from "next/dynamic";
 import { io, type Socket } from "socket.io-client";
 
@@ -40,6 +46,17 @@ type GamePlayer = {
   maxHp: number;
   level: number;
   xp: number;
+  enemiesDefeated: number;
+  status: "alive" | "defeated";
+};
+
+type GameEnemy = {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  hp: number;
+  maxHp: number;
   status: "alive" | "defeated";
 };
 
@@ -52,6 +69,7 @@ type GameState = {
     y: number;
   };
   players: GamePlayer[];
+  enemies: GameEnemy[];
 };
 
 type ServerToClientEvents = {
@@ -71,6 +89,9 @@ type ClientToServerEvents = {
   "game:move": (payload: {
     direction: Direction;
   }) => void;
+  "game:attack": (payload: {
+    direction: Direction;
+  }) => void;
 };
 
 const SOCKET_URL =
@@ -80,6 +101,9 @@ export default function OnlineGame() {
   const socketRef = useRef<
     Socket<ServerToClientEvents, ClientToServerEvents> | null
   >(null);
+  const attackDirectionRef = useRef<Direction>("down");
+  const movementIntervalRef = useRef<number | null>(null);
+  const moveRef = useRef<(direction: Direction) => void>(() => {});
 
   const [connected, setConnected] = useState(false);
   const [currentPlayerId, setCurrentPlayerId] = useState<
@@ -90,6 +114,64 @@ export default function OnlineGame() {
   const [lobby, setLobby] = useState<LobbyState | null>(null);
   const [gameState, setGameState] = useState<GameState | null>(null);
   const [error, setError] = useState("");
+
+  const stopMoving = useCallback(() => {
+    if (movementIntervalRef.current !== null) {
+      window.clearInterval(movementIntervalRef.current);
+      movementIntervalRef.current = null;
+    }
+  }, []);
+
+  const move = useCallback((direction: Direction) => {
+    const socket = socketRef.current;
+
+    attackDirectionRef.current = direction;
+
+    if (!socket?.connected || !gameState) {
+      setError("Primero entra en una sala.");
+      return;
+    }
+
+    socket.emit("game:move", { direction });
+  }, [gameState]);
+
+  const startMoving = useCallback(
+    (direction: Direction) => {
+      stopMoving();
+      move(direction);
+      movementIntervalRef.current = window.setInterval(
+        () => moveRef.current(direction),
+        180
+      );
+    },
+    [move, stopMoving]
+  );
+
+  const stopIfPointerLeaves = useCallback(
+    (event: ReactPointerEvent<HTMLButtonElement>) => {
+      const bounds = event.currentTarget.getBoundingClientRect();
+      if (
+        event.clientX < bounds.left ||
+        event.clientX > bounds.right ||
+        event.clientY < bounds.top ||
+        event.clientY > bounds.bottom
+      ) {
+        stopMoving();
+      }
+    },
+    [stopMoving]
+  );
+
+  useEffect(() => {
+    moveRef.current = move;
+  }, [move]);
+
+  useEffect(() => {
+    const player = gameState?.players.find(
+      (candidate) => candidate.id === currentPlayerId
+    );
+    if (!gameState || player?.status === "defeated") stopMoving();
+  }, [currentPlayerId, gameState, stopMoving]);
 
   useEffect(() => {
     const socket: Socket<ServerToClientEvents, ClientToServerEvents> =
@@ -104,6 +186,7 @@ export default function OnlineGame() {
     };
 
     const onDisconnect = () => {
+      stopMoving();
       setConnected(false);
       setCurrentPlayerId(undefined);
       setLobby(null);
@@ -121,10 +204,16 @@ export default function OnlineGame() {
 
     const onGameState = (state: GameState) => {
       setGameState(state);
+      setError("");
     };
 
     const onAppError = (payload: { message: string }) => {
       setError(payload.message);
+    };
+
+    const stopOnFocusLoss = () => stopMoving();
+    const stopWhenHidden = () => {
+      if (document.hidden) stopMoving();
     };
 
     socket.on("connect", onConnect);
@@ -133,19 +222,28 @@ export default function OnlineGame() {
     socket.on("lobby:state", onLobbyState);
     socket.on("game:state", onGameState);
     socket.on("app:error", onAppError);
+    window.addEventListener("pointerup", stopOnFocusLoss);
+    window.addEventListener("pointercancel", stopOnFocusLoss);
+    window.addEventListener("blur", stopOnFocusLoss);
+    document.addEventListener("visibilitychange", stopWhenHidden);
 
     return () => {
+      stopMoving();
       socket.off("connect", onConnect);
       socket.off("disconnect", onDisconnect);
       socket.off("connect_error", onConnectionError);
       socket.off("lobby:state", onLobbyState);
       socket.off("game:state", onGameState);
       socket.off("app:error", onAppError);
+      window.removeEventListener("pointerup", stopOnFocusLoss);
+      window.removeEventListener("pointercancel", stopOnFocusLoss);
+      window.removeEventListener("blur", stopOnFocusLoss);
+      document.removeEventListener("visibilitychange", stopWhenHidden);
 
       socket.disconnect();
       socketRef.current = null;
     };
-  }, []);
+  }, [stopMoving]);
 
   const joinRoom = () => {
     const socket = socketRef.current;
@@ -164,7 +262,7 @@ export default function OnlineGame() {
     });
   };
 
-  const move = (direction: Direction) => {
+  const attack = () => {
     const socket = socketRef.current;
 
     if (!socket?.connected || !gameState) {
@@ -172,7 +270,9 @@ export default function OnlineGame() {
       return;
     }
 
-    socket.emit("game:move", { direction });
+    socket.emit("game:attack", {
+      direction: attackDirectionRef.current,
+    });
   };
 
   const currentPlayer = lobby?.players.find(
@@ -297,6 +397,7 @@ export default function OnlineGame() {
           gameState={gameState}
           currentPlayerId={currentPlayerId}
           onMove={move}
+          onAttack={attack}
         />
 
         {currentGamePlayer && (
@@ -310,6 +411,9 @@ export default function OnlineGame() {
             <span>Nivel: {currentGamePlayer.level}</span>
             <span>XP: {currentGamePlayer.xp}</span>
             <span>
+              Centinelas derrotados: {currentGamePlayer.enemiesDefeated}
+            </span>
+            <span>
               Estado:{" "}
               {currentGamePlayer.status === "alive"
                 ? "Vivo"
@@ -319,50 +423,86 @@ export default function OnlineGame() {
         )}
 
         {gameState && (
-          <div className="mt-4 flex flex-col items-center gap-1 md:hidden">
+          <div className="mt-4 flex flex-wrap items-center justify-center gap-4 md:hidden">
+            <div className="flex flex-col items-center gap-1">
+              <button
+                type="button"
+                aria-label="Mover arriba"
+                onPointerDown={(event) => {
+                  event.preventDefault();
+                  startMoving("up");
+                }}
+                onPointerLeave={stopMoving}
+                onPointerMove={stopIfPointerLeaves}
+                onPointerCancel={stopMoving}
+                className="h-12 w-14 touch-none select-none rounded-lg border border-slate-600 bg-slate-800 text-xl text-cyan-300 active:bg-slate-700"
+              >
+                ↑
+              </button>
+
+              <div className="flex gap-1">
+                <button
+                  type="button"
+                  aria-label="Mover a la izquierda"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    startMoving("left");
+                  }}
+                  onPointerLeave={stopMoving}
+                  onPointerMove={stopIfPointerLeaves}
+                  onPointerCancel={stopMoving}
+                  className="h-12 w-14 touch-none select-none rounded-lg border border-slate-600 bg-slate-800 text-xl text-cyan-300 active:bg-slate-700"
+                >
+                  ←
+                </button>
+
+                <button
+                  type="button"
+                  aria-label="Mover abajo"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    startMoving("down");
+                  }}
+                  onPointerLeave={stopMoving}
+                  onPointerMove={stopIfPointerLeaves}
+                  onPointerCancel={stopMoving}
+                  className="h-12 w-14 touch-none select-none rounded-lg border border-slate-600 bg-slate-800 text-xl text-cyan-300 active:bg-slate-700"
+                >
+                  ↓
+                </button>
+
+                <button
+                  type="button"
+                  aria-label="Mover a la derecha"
+                  onPointerDown={(event) => {
+                    event.preventDefault();
+                    startMoving("right");
+                  }}
+                  onPointerLeave={stopMoving}
+                  onPointerMove={stopIfPointerLeaves}
+                  onPointerCancel={stopMoving}
+                  className="h-12 w-14 touch-none select-none rounded-lg border border-slate-600 bg-slate-800 text-xl text-cyan-300 active:bg-slate-700"
+                >
+                  →
+                </button>
+              </div>
+            </div>
+
             <button
               type="button"
-              aria-label="Mover arriba"
-              onClick={() => move("up")}
-              className="h-12 w-14 rounded-lg border border-slate-600 bg-slate-800 text-xl text-cyan-300 active:bg-slate-700"
+              aria-label="Atacar"
+              onClick={attack}
+              className="min-h-12 rounded-lg border border-red-400/40 bg-red-950 px-4 py-3 font-bold text-red-200 active:bg-red-900"
             >
-              ↑
+              ATACAR
             </button>
-
-            <div className="flex gap-1">
-              <button
-                type="button"
-                aria-label="Mover a la izquierda"
-                onClick={() => move("left")}
-                className="h-12 w-14 rounded-lg border border-slate-600 bg-slate-800 text-xl text-cyan-300 active:bg-slate-700"
-              >
-                ←
-              </button>
-
-              <button
-                type="button"
-                aria-label="Mover abajo"
-                onClick={() => move("down")}
-                className="h-12 w-14 rounded-lg border border-slate-600 bg-slate-800 text-xl text-cyan-300 active:bg-slate-700"
-              >
-                ↓
-              </button>
-
-              <button
-                type="button"
-                aria-label="Mover a la derecha"
-                onClick={() => move("right")}
-                className="h-12 w-14 rounded-lg border border-slate-600 bg-slate-800 text-xl text-cyan-300 active:bg-slate-700"
-              >
-                →
-              </button>
-            </div>
           </div>
         )}
 
         <p className="mt-3 text-xs leading-5 text-slate-500">
-          PC: WASD o flechas. Móvil: utiliza el pad direccional. Las
-          posiciones visibles proceden del estado enviado por el servidor.
+          PC: WASD o flechas para moverte, espacio para atacar en la última
+          dirección indicada. Móvil: usa el pad y ATACAR. El servidor decide
+          los resultados del combate.
         </p>
       </div>
     </section>

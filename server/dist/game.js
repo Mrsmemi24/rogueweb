@@ -1,5 +1,13 @@
 import { generateDungeon, } from "./dungeon.js";
 import { z } from "zod";
+const PLAYER_ATTACK = 18;
+const PLAYER_DEFENSE = 3;
+const ENEMY_LEVEL = 1;
+const ENEMY_MAX_HP = 28 + ENEMY_LEVEL * 8;
+const ENEMY_DAMAGE = 5 + ENEMY_LEVEL * 2;
+const ENEMY_DEFENSE = Math.floor((ENEMY_LEVEL - 1) / 3);
+const ENEMY_XP_REWARD = 50 + ENEMY_LEVEL * 25;
+const MAX_ROOM_ENEMIES = 3;
 export const JoinRoomSchema = z
     .object({
     roomId: z
@@ -17,6 +25,11 @@ export const MoveIntentSchema = z
     direction: z.enum(["up", "down", "left", "right"]),
 })
     .strict();
+export const AttackIntentSchema = z
+    .object({
+    direction: z.enum(["up", "down", "left", "right"]),
+})
+    .strict();
 const DIRECTION_OFFSETS = {
     up: { x: 0, y: -1 },
     down: { x: 0, y: 1 },
@@ -26,10 +39,64 @@ const DIRECTION_OFFSETS = {
 function isDirection(direction) {
     return Object.hasOwn(DIRECTION_OFFSETS, direction);
 }
+function createRandom(seed) {
+    let state = seed >>> 0;
+    return () => {
+        state = (state + 0x6d2b79f5) >>> 0;
+        let value = state;
+        value = Math.imul(value ^ (value >>> 15), value | 1);
+        value ^= value + Math.imul(value ^ (value >>> 7), value | 61);
+        return ((value ^ (value >>> 14)) >>> 0) / 4294967296;
+    };
+}
+function createEnemies(dungeon) {
+    const blockedPositions = new Set([...dungeon.spawns, dungeon.exit].map(({ x, y }) => `${x},${y}`));
+    const candidates = [];
+    for (let y = 0; y < dungeon.map.length; y++) {
+        for (let x = 0; x < dungeon.map[y].length; x++) {
+            if (dungeon.map[y][x] === "." &&
+                !blockedPositions.has(`${x},${y}`)) {
+                candidates.push({ x, y });
+            }
+        }
+    }
+    const random = createRandom(dungeon.seed ^ 0xa5a5a5a5);
+    for (let index = candidates.length - 1; index > 0; index--) {
+        const swapIndex = Math.floor(random() * (index + 1));
+        [candidates[index], candidates[swapIndex]] = [
+            candidates[swapIndex],
+            candidates[index],
+        ];
+    }
+    const enemies = [];
+    for (const position of candidates) {
+        if (enemies.length >= MAX_ROOM_ENEMIES)
+            break;
+        const tooClose = enemies.some((enemy) => Math.abs(enemy.x - position.x) +
+            Math.abs(enemy.y - position.y) <
+            3);
+        if (tooClose)
+            continue;
+        enemies.push({
+            id: `sentinel-${enemies.length + 1}`,
+            name: `Centinela nivel ${ENEMY_LEVEL}`,
+            ...position,
+            hp: ENEMY_MAX_HP,
+            maxHp: ENEMY_MAX_HP,
+            damage: ENEMY_DAMAGE,
+            defense: ENEMY_DEFENSE,
+            xpReward: ENEMY_XP_REWARD,
+            status: "alive",
+        });
+    }
+    return enemies;
+}
 export function createRoomState(seed) {
+    const dungeon = generateDungeon(seed);
     return {
-        dungeon: generateDungeon(seed),
+        dungeon,
         players: new Map(),
+        enemies: createEnemies(dungeon),
     };
 }
 export function createPlayer(id, name, position) {
@@ -40,8 +107,11 @@ export function createPlayer(id, name, position) {
         ...position,
         hp: 100,
         maxHp: 100,
+        attack: PLAYER_ATTACK,
+        defense: PLAYER_DEFENSE,
         level: 1,
         xp: 0,
+        enemiesDefeated: 0,
         status: "alive",
     };
 }
@@ -64,6 +134,7 @@ export function toPublicPlayerState(player) {
         maxHp: player.maxHp,
         level: player.level,
         xp: player.xp,
+        enemiesDefeated: player.enemiesDefeated,
         status: player.status,
     };
 }
@@ -74,6 +145,18 @@ export function toPublicGameState(roomId, room) {
         map: [...room.dungeon.map],
         exit: { ...room.dungeon.exit },
         players: Array.from(room.players.values(), toPublicPlayerState),
+        enemies: room.enemies.map(toPublicEnemyState),
+    };
+}
+export function toPublicEnemyState(enemy) {
+    return {
+        id: enemy.id,
+        name: enemy.name,
+        x: enemy.x,
+        y: enemy.y,
+        hp: enemy.hp,
+        maxHp: enemy.maxHp,
+        status: enemy.status,
     };
 }
 export function getOrCreateRoom(rooms, roomId, seed) {
@@ -117,7 +200,43 @@ export function tryMovePlayer(room, playerId, direction) {
     if (occupied) {
         return { ok: false, reason: "occupied" };
     }
+    const enemyOccupied = room.enemies.some((enemy) => enemy.status === "alive" &&
+        enemy.x === nextX &&
+        enemy.y === nextY);
+    if (enemyOccupied) {
+        return { ok: false, reason: "enemy-occupied" };
+    }
     player.x = nextX;
     player.y = nextY;
     return { ok: true };
+}
+export function tryAttackPlayer(room, playerId, direction) {
+    if (!isDirection(direction)) {
+        return { ok: false, reason: "invalid-direction" };
+    }
+    const player = room.players.get(playerId);
+    if (!player) {
+        return { ok: false, reason: "player-not-found" };
+    }
+    if (player.status === "defeated") {
+        return { ok: false, reason: "defeated" };
+    }
+    const offset = DIRECTION_OFFSETS[direction];
+    const targetX = player.x + offset.x;
+    const targetY = player.y + offset.y;
+    const enemy = room.enemies.find((candidate) => candidate.status === "alive" &&
+        candidate.x === targetX &&
+        candidate.y === targetY);
+    if (!enemy) {
+        return { ok: false, reason: "no-enemy" };
+    }
+    const damage = Math.max(1, player.attack - enemy.defense);
+    enemy.hp = Math.max(0, enemy.hp - damage);
+    const defeated = enemy.hp === 0;
+    enemy.status = defeated ? "defeated" : "alive";
+    if (defeated) {
+        player.xp += enemy.xpReward;
+        player.enemiesDefeated += 1;
+    }
+    return { ok: true, damage, defeated };
 }

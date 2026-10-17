@@ -46,6 +46,8 @@ export default function PhaserGame() {
       private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
       private wasd?: Record<string, Phaser.Input.Keyboard.Key>;
       private attackKey?: Phaser.Input.Keyboard.Key;
+      private lastMoveDirection?: "up" | "down" | "left" | "right";
+      private lastMoveAt = 0;
 
       private grid!: Phaser.GameObjects.Graphics;
       private player!: Phaser.GameObjects.Rectangle;
@@ -71,30 +73,50 @@ export default function PhaserGame() {
       private completed = false;
       private dead = false;
 
+      private readonly handleFocusLoss = () => {
+        this.input.keyboard?.resetKeys();
+        this.lastMoveDirection = undefined;
+        this.lastMoveAt = 0;
+      };
+
+      private readonly handleVisibilityChange = () => {
+        if (document.hidden) {
+          this.handleFocusLoss();
+        }
+      };
+
+      private readonly removeFocusListeners = () => {
+        window.removeEventListener("blur", this.handleFocusLoss);
+        document.removeEventListener(
+          "visibilitychange",
+          this.handleVisibilityChange
+        );
+      };
+
       private readonly handleVirtualMove = (event: Event) => {
-  if (this.dead || this.completed) return;
+        if (this.dead || this.completed) return;
 
-  const direction = (event as CustomEvent<string>).detail;
+        const direction = (event as CustomEvent<string>).detail;
 
-  const directions: Record<string, Point> = {
-    up: { x: 0, y: -1 },
-    down: { x: 0, y: 1 },
-    left: { x: -1, y: 0 },
-    right: { x: 1, y: 0 },
-  };
+        const directions: Record<string, Point> = {
+          up: { x: 0, y: -1 },
+          down: { x: 0, y: 1 },
+          left: { x: -1, y: 0 },
+          right: { x: 1, y: 0 },
+        };
 
-  const movement = directions[direction];
+        const movement = directions[direction];
 
-  if (movement) {
-    this.movePlayer(movement.x, movement.y);
-  }
-};
+        if (movement) {
+          this.movePlayer(movement.x, movement.y);
+        }
+      };
 
-private readonly handleVirtualAttack = () => {
-  if (this.dead || this.completed) return;
+      private readonly handleVirtualAttack = () => {
+        if (this.dead || this.completed) return;
 
-  this.attackEnemy();
-};
+        this.attackEnemy();
+      };
 
       constructor() {
         super("DungeonScene");
@@ -133,27 +155,23 @@ private readonly handleVirtualAttack = () => {
           .setOrigin(1, 0)
           .setDepth(10)
           .setScrollFactor(0);
-          window.addEventListener(
-  "rogueweb:move",
-  this.handleVirtualMove
-    );
+        window.addEventListener("rogueweb:move", this.handleVirtualMove);
+        window.addEventListener("rogueweb:attack", this.handleVirtualAttack);
+        window.addEventListener("blur", this.handleFocusLoss);
+        document.addEventListener(
+          "visibilitychange",
+          this.handleVisibilityChange
+        );
 
-    window.addEventListener(
-    "rogueweb:attack",
-    this.handleVirtualAttack
-    );
-
-    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
-    window.removeEventListener(
-        "rogueweb:move",
-        this.handleVirtualMove
-    );
-
-    window.removeEventListener(
-        "rogueweb:attack",
-        this.handleVirtualAttack
-    );
-    });
+        this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
+          window.removeEventListener("rogueweb:move", this.handleVirtualMove);
+          window.removeEventListener("rogueweb:attack", this.handleVirtualAttack);
+          this.removeFocusListeners();
+        });
+        this.events.once(
+          Phaser.Scenes.Events.DESTROY,
+          this.removeFocusListeners
+        );
 
         this.drawBoard(this.scale.width, this.scale.height);
 
@@ -194,12 +212,28 @@ private readonly handleVirtualAttack = () => {
       }
 
       update() {
+        if (document.hidden) {
+          this.handleFocusLoss();
+          return;
+        }
+
         if (
           !this.cursors ||
           !this.wasd ||
           this.dead ||
           this.completed
         ) {
+          this.lastMoveDirection = undefined;
+          return;
+        }
+
+        if (
+          (document.activeElement instanceof HTMLElement &&
+            document.activeElement.isContentEditable) ||
+          document.activeElement instanceof HTMLInputElement ||
+          document.activeElement instanceof HTMLTextAreaElement
+        ) {
+          this.handleFocusLoss();
           return;
         }
 
@@ -211,30 +245,39 @@ private readonly handleVirtualAttack = () => {
           return;
         }
 
-        const left =
-          Phaser.Input.Keyboard.JustDown(this.cursors.left) ||
-          Phaser.Input.Keyboard.JustDown(this.wasd.left);
+        const direction:
+          | "up"
+          | "down"
+          | "left"
+          | "right"
+          | undefined =
+          this.cursors.left.isDown || this.wasd.left.isDown
+            ? "left"
+            : this.cursors.right.isDown || this.wasd.right.isDown
+              ? "right"
+              : this.cursors.up.isDown || this.wasd.up.isDown
+                ? "up"
+                : this.cursors.down.isDown || this.wasd.down.isDown
+                  ? "down"
+                  : undefined;
 
-        const right =
-          Phaser.Input.Keyboard.JustDown(this.cursors.right) ||
-          Phaser.Input.Keyboard.JustDown(this.wasd.right);
+        if (!direction) {
+          this.lastMoveDirection = undefined;
+          this.lastMoveAt = 0;
+        } else if (
+          direction !== this.lastMoveDirection ||
+          this.time.now - this.lastMoveAt >= 200
+        ) {
+          const movement = {
+            up: { x: 0, y: -1 },
+            down: { x: 0, y: 1 },
+            left: { x: -1, y: 0 },
+            right: { x: 1, y: 0 },
+          }[direction];
 
-        const up =
-          Phaser.Input.Keyboard.JustDown(this.cursors.up) ||
-          Phaser.Input.Keyboard.JustDown(this.wasd.up);
-
-        const down =
-          Phaser.Input.Keyboard.JustDown(this.cursors.down) ||
-          Phaser.Input.Keyboard.JustDown(this.wasd.down);
-
-        if (left) {
-          this.movePlayer(-1, 0);
-        } else if (right) {
-          this.movePlayer(1, 0);
-        } else if (up) {
-          this.movePlayer(0, -1);
-        } else if (down) {
-          this.movePlayer(0, 1);
+          this.movePlayer(movement.x, movement.y);
+          this.lastMoveDirection = direction;
+          this.lastMoveAt = this.time.now;
         }
       }
 

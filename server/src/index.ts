@@ -5,11 +5,13 @@ import { Server } from "socket.io";
 import { z } from "zod";
 import {
   createPlayer,
+  AttackIntentSchema,
   findAvailableSpawn,
   getOrCreateRoom,
   JoinRoomSchema,
   MoveIntentSchema,
   toPublicGameState,
+  tryAttackPlayer,
   tryMovePlayer,
   type PublicGameState,
   type Player,
@@ -40,6 +42,7 @@ interface ClientToServerEvents {
   "lobby:join": (payload: unknown) => void;
   "lobby:ready": (payload: unknown) => void;
   "game:move": (payload: unknown) => void;
+  "game:attack": (payload: unknown) => void;
 }
 
 interface ServerToClientEvents {
@@ -286,6 +289,7 @@ io.on("connection", (socket) => {
         "outside-map": "No puedes salir del tablero.",
         wall: "Movimiento bloqueado por una pared.",
         occupied: "Esa casilla ya está ocupada.",
+        "enemy-occupied": "Un centinela bloquea esa casilla.",
       };
       socket.emit("app:error", {
         message: errorMessages[moveResult.reason],
@@ -294,6 +298,48 @@ io.on("connection", (socket) => {
     }
 
     // Todos los jugadores reciben el estado autorizado.
+    broadcastGame(roomId);
+  });
+
+  socket.on("game:attack", (payload) => {
+    const result = AttackIntentSchema.safeParse(payload);
+
+    if (!result.success) {
+      socket.emit("app:error", {
+        message: "El ataque debe indicar una dirección válida.",
+      });
+      return;
+    }
+
+    const roomId = socket.data.roomId;
+    const room = roomId ? rooms.get(roomId) : undefined;
+
+    if (!roomId || !room) {
+      socket.emit("app:error", {
+        message: "Debes entrar en una sala antes de atacar.",
+      });
+      return;
+    }
+
+    const attackResult = tryAttackPlayer(
+      room,
+      socket.id,
+      result.data.direction
+    );
+
+    if (!attackResult.ok) {
+      const errorMessages = {
+        "invalid-direction": "Dirección de ataque inválida.",
+        "player-not-found": "No se encontró al jugador en la sala.",
+        defeated: "Un jugador derrotado no puede atacar.",
+        "no-enemy": "No hay un centinela en esa dirección.",
+      };
+      socket.emit("app:error", {
+        message: errorMessages[attackResult.reason],
+      });
+      return;
+    }
+
     broadcastGame(roomId);
   });
 

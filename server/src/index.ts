@@ -7,7 +7,24 @@ const PORT = Number(process.env.PORT ?? 3001);
 const ALLOWED_ORIGIN =
   process.env.CLIENT_ORIGIN ?? "http://localhost:3000";
 
-// Validamos los datos que llegan desde el navegador.
+// Tablero de prueba compartido por todos los clientes.
+const GAME_MAP = [
+  "#########",
+  "#.......#",
+  "#..#....#",
+  "#..#.#..#",
+  "#.......#",
+  "#...#...#",
+  "#########",
+];
+
+const SPAWNS = [
+  { x: 1, y: 1 },
+  { x: 7, y: 1 },
+  { x: 1, y: 5 },
+  { x: 7, y: 5 },
+];
+
 const JoinRoomSchema = z
   .object({
     roomId: z
@@ -17,7 +34,6 @@ const JoinRoomSchema = z
       .max(24)
       .regex(/^[a-zA-Z0-9_-]+$/)
       .transform((value) => value.toLowerCase()),
-
     playerName: z.string().trim().min(1).max(20),
   })
   .strict();
@@ -28,10 +44,18 @@ const ReadySchema = z
   })
   .strict();
 
+const MoveSchema = z
+  .object({
+    direction: z.enum(["up", "down", "left", "right"]),
+  })
+  .strict();
+
 type Player = {
   id: string;
   name: string;
   ready: boolean;
+  x: number;
+  y: number;
 };
 
 type LobbyState = {
@@ -39,13 +63,23 @@ type LobbyState = {
   players: Player[];
 };
 
+type GamePlayer = Pick<Player, "id" | "name" | "x" | "y">;
+
+type GameState = {
+  roomId: string;
+  map: string[];
+  players: GamePlayer[];
+};
+
 interface ClientToServerEvents {
   "lobby:join": (payload: unknown) => void;
   "lobby:ready": (payload: unknown) => void;
+  "game:move": (payload: unknown) => void;
 }
 
 interface ServerToClientEvents {
   "lobby:state": (state: LobbyState) => void;
+  "game:state": (state: GameState) => void;
   "app:error": (payload: { message: string }) => void;
 }
 
@@ -90,7 +124,6 @@ const io = new Server<
   },
 });
 
-// Las salas y sus jugadores viven en memoria durante esta fase.
 const rooms = new Map<string, Map<string, Player>>();
 
 function broadcastLobby(roomId: string) {
@@ -98,12 +131,31 @@ function broadcastLobby(roomId: string) {
 
   if (!room) return;
 
-  const state: LobbyState = {
+  io.to(roomId).emit("lobby:state", {
     roomId,
     players: Array.from(room.values()),
-  };
+  });
+}
 
-  io.to(roomId).emit("lobby:state", state);
+function broadcastGame(roomId: string) {
+  const room = rooms.get(roomId);
+
+  if (!room) return;
+
+  const players: GamePlayer[] = Array.from(room.values()).map(
+    ({ id, name, x, y }) => ({
+      id,
+      name,
+      x,
+      y,
+    })
+  );
+
+  io.to(roomId).emit("game:state", {
+    roomId,
+    map: [...GAME_MAP],
+    players,
+  });
 }
 
 function removePlayerFromRoom(
@@ -122,6 +174,7 @@ function removePlayerFromRoom(
   }
 
   broadcastLobby(roomId);
+  broadcastGame(roomId);
 }
 
 io.on("connection", (socket) => {
@@ -132,17 +185,37 @@ io.on("connection", (socket) => {
 
     if (!result.success) {
       socket.emit("app:error", {
-        message:
-          "Datos inválidos. Revisa el nombre y el identificador de la sala.",
+        message: "Nombre o identificador de sala inválido.",
       });
       return;
     }
 
     const { roomId, playerName } = result.data;
-
-    // Un jugador solo puede pertenecer a una sala a la vez.
     const previousRoom = socket.data.roomId;
 
+    // Entrar de nuevo a la misma sala no debe duplicar al jugador.
+    if (previousRoom === roomId) {
+      const existing = rooms.get(roomId)?.get(socket.id);
+
+      if (existing) {
+        existing.name = playerName;
+        broadcastLobby(roomId);
+        broadcastGame(roomId);
+        return;
+      }
+    }
+
+    const targetRoom = rooms.get(roomId);
+
+    // Hay cuatro posiciones de aparición disponibles.
+    if (targetRoom && targetRoom.size >= SPAWNS.length) {
+      socket.emit("app:error", {
+        message: "La sala está llena. El máximo es de cuatro jugadores.",
+      });
+      return;
+    }
+
+    // Solo abandonamos la sala anterior si la nueva es válida.
     if (previousRoom) {
       removePlayerFromRoom(previousRoom, socket.id);
       void socket.leave(previousRoom);
@@ -155,18 +228,34 @@ io.on("connection", (socket) => {
       rooms.set(roomId, room);
     }
 
-    const player: Player = {
+    const spawn = SPAWNS.find(
+      (position) =>
+        !Array.from(room!.values()).some(
+          (player) =>
+            player.x === position.x && player.y === position.y
+        )
+    );
+
+    if (!spawn) {
+      socket.emit("app:error", {
+        message: "No quedan posiciones de aparición libres.",
+      });
+      return;
+    }
+
+    room.set(socket.id, {
       id: socket.id,
       name: playerName,
       ready: false,
-    };
+      x: spawn.x,
+      y: spawn.y,
+    });
 
-    room.set(socket.id, player);
     socket.data.roomId = roomId;
-
     void socket.join(roomId);
 
     broadcastLobby(roomId);
+    broadcastGame(roomId);
 
     console.log(`${playerName} entró en la sala ${roomId}`);
   });
@@ -182,28 +271,97 @@ io.on("connection", (socket) => {
     }
 
     const roomId = socket.data.roomId;
+    const room = roomId ? rooms.get(roomId) : undefined;
+    const player = room?.get(socket.id);
 
-    if (!roomId) {
+    if (!roomId || !room || !player) {
       socket.emit("app:error", {
         message: "Primero debes entrar en una sala.",
       });
       return;
     }
 
-    const room = rooms.get(roomId);
-    const player = room?.get(socket.id);
+    player.ready = result.data.ready;
+    broadcastLobby(roomId);
+  });
 
-    if (!room || !player) {
+  socket.on("game:move", (payload) => {
+    // Nunca confiamos en coordenadas enviadas por el navegador.
+    const result = MoveSchema.safeParse(payload);
+
+    if (!result.success) {
       socket.emit("app:error", {
-        message: "No se encontró al jugador en la sala.",
+        message: "Movimiento inválido.",
       });
       return;
     }
 
-    // El servidor actualiza el estado y después lo comunica.
-    player.ready = result.data.ready;
+    const roomId = socket.data.roomId;
+    const room = roomId ? rooms.get(roomId) : undefined;
+    const player = room?.get(socket.id);
 
-    broadcastLobby(roomId);
+    if (!roomId || !room || !player) {
+      socket.emit("app:error", {
+        message: "Debes entrar en una sala antes de moverte.",
+      });
+      return;
+    }
+
+    const offsets = {
+      up: { dx: 0, dy: -1 },
+      down: { dx: 0, dy: 1 },
+      left: { dx: -1, dy: 0 },
+      right: { dx: 1, dy: 0 },
+    };
+
+    const { dx, dy } = offsets[result.data.direction];
+
+    const nextX = player.x + dx;
+    const nextY = player.y + dy;
+
+    // El servidor comprueba los límites del mapa.
+    if (
+      nextY < 0 ||
+      nextY >= GAME_MAP.length ||
+      nextX < 0 ||
+      nextX >= GAME_MAP[0].length
+    ) {
+      socket.emit("app:error", {
+        message: "No puedes salir del tablero.",
+      });
+      return;
+    }
+
+    // El símbolo # representa una pared.
+    if (GAME_MAP[nextY][nextX] !== ".") {
+      socket.emit("app:error", {
+        message: "Movimiento bloqueado por una pared.",
+      });
+      return;
+    }
+
+    // Evitamos que dos jugadores ocupen la misma casilla.
+    const occupied = Array.from(room.values()).some(
+      (other) =>
+        other.id !== player.id &&
+        other.x === nextX &&
+        other.y === nextY
+    );
+
+    if (occupied) {
+      socket.emit("app:error", {
+        message: "Esa casilla ya está ocupada.",
+      });
+      return;
+    }
+
+    // El cliente solicita una dirección; el servidor calcula
+    // y actualiza la posición real.
+    player.x = nextX;
+    player.y = nextY;
+
+    // Todos los jugadores reciben el estado autorizado.
+    broadcastGame(roomId);
   });
 
   socket.on("disconnect", () => {

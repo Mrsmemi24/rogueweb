@@ -3,10 +3,14 @@
 import { useEffect, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
 
+type Direction = "up" | "down" | "left" | "right";
+
 type LobbyPlayer = {
   id: string;
   name: string;
   ready: boolean;
+  x: number;
+  y: number;
 };
 
 type LobbyState = {
@@ -14,14 +18,36 @@ type LobbyState = {
   players: LobbyPlayer[];
 };
 
+type GamePlayer = {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+};
+
+type GameState = {
+  roomId: string;
+  map: string[];
+  players: GamePlayer[];
+};
+
 type ServerToClientEvents = {
   "lobby:state": (state: LobbyState) => void;
+  "game:state": (state: GameState) => void;
   "app:error": (payload: { message: string }) => void;
 };
 
 type ClientToServerEvents = {
-  "lobby:join": (payload: { roomId: string; playerName: string }) => void;
-  "lobby:ready": (payload: { ready: boolean }) => void;
+  "lobby:join": (payload: {
+    roomId: string;
+    playerName: string;
+  }) => void;
+  "lobby:ready": (payload: {
+    ready: boolean;
+  }) => void;
+  "game:move": (payload: {
+    direction: Direction;
+  }) => void;
 };
 
 const SOCKET_URL =
@@ -36,11 +62,13 @@ export default function LobbyPanel() {
   const [roomId, setRoomId] = useState("mazmorra-1");
   const [playerName, setPlayerName] = useState("Explorador");
   const [lobby, setLobby] = useState<LobbyState | null>(null);
+  const [gameState, setGameState] = useState<GameState | null>(null);
   const [error, setError] = useState("");
 
   useEffect(() => {
     const socket: Socket<ServerToClientEvents, ClientToServerEvents> =
       io(SOCKET_URL);
+
     socketRef.current = socket;
 
     const handleConnect = () => {
@@ -51,17 +79,22 @@ export default function LobbyPanel() {
     const handleDisconnect = () => {
       setConnected(false);
       setLobby(null);
+      setGameState(null);
     };
 
     const handleConnectError = () => {
       setConnected(false);
       setError(
-        "No se pudo conectar al servidor. Comprueba que esté ejecutándose."
+        "No se pudo conectar al servidor. Comprueba que esté activo."
       );
     };
 
     const handleLobbyState = (state: LobbyState) => {
       setLobby(state);
+    };
+
+    const handleGameState = (state: GameState) => {
+      setGameState(state);
       setError("");
     };
 
@@ -73,6 +106,7 @@ export default function LobbyPanel() {
     socket.on("disconnect", handleDisconnect);
     socket.on("connect_error", handleConnectError);
     socket.on("lobby:state", handleLobbyState);
+    socket.on("game:state", handleGameState);
     socket.on("app:error", handleAppError);
 
     return () => {
@@ -80,6 +114,7 @@ export default function LobbyPanel() {
       socket.off("disconnect", handleDisconnect);
       socket.off("connect_error", handleConnectError);
       socket.off("lobby:state", handleLobbyState);
+      socket.off("game:state", handleGameState);
       socket.off("app:error", handleAppError);
 
       socket.disconnect();
@@ -96,7 +131,6 @@ export default function LobbyPanel() {
     }
 
     setError("");
-    setLobby(null);
 
     socket.emit("lobby:join", {
       roomId,
@@ -104,7 +138,24 @@ export default function LobbyPanel() {
     });
   };
 
+  const move = (direction: Direction) => {
+    const socket = socketRef.current;
+
+    if (!socket?.connected || !gameState) {
+      setError("Primero entra en una sala.");
+      return;
+    }
+
+    // Solo enviamos la intención. El servidor calcula y valida las coordenadas.
+    socket.emit("game:move", { direction });
+  };
+
   const currentPlayer = lobby?.players.find(
+    (player) => player.id === socketRef.current?.id
+  );
+
+  // Jugador actual tomado del estado de juego (posición actualizada)
+  const currentGamePlayer = gameState?.players.find(
     (player) => player.id === socketRef.current?.id
   );
 
@@ -120,12 +171,12 @@ export default function LobbyPanel() {
     });
   };
 
+  const otherPlayers = gameState?.players ?? [];
+
   return (
     <section className="my-6 rounded-xl border border-slate-800 bg-slate-900 p-4 sm:p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-bold">
-          Multijugador · Lobby de prueba
-        </h2>
+        <h2 className="text-lg font-bold">Multijugador · RogueWeb</h2>
 
         <span
           className={
@@ -165,7 +216,7 @@ export default function LobbyPanel() {
           type="button"
           onClick={joinRoom}
           disabled={!connected}
-          className="rounded-lg bg-cyan-500 px-4 py-2 font-semibold text-slate-950 hover:bg-cyan-400 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-lg bg-cyan-500 px-4 py-2 font-semibold text-slate-950 disabled:opacity-50"
         >
           Entrar a la sala
         </button>
@@ -174,7 +225,7 @@ export default function LobbyPanel() {
           type="button"
           onClick={toggleReady}
           disabled={!connected || !currentPlayer}
-          className="rounded-lg border border-slate-600 px-4 py-2 font-semibold hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-lg border border-slate-600 px-4 py-2 font-semibold disabled:opacity-50"
         >
           {currentPlayer?.ready ? "Cancelar preparación" : "Estoy listo"}
         </button>
@@ -220,10 +271,105 @@ export default function LobbyPanel() {
         </div>
       )}
 
-      <p className="mt-4 text-xs leading-5 text-slate-500">
-        Esta sala sirve para probar la comunicación en tiempo real. Todavía no
-        inicia una partida multijugador.
-      </p>
+      {gameState && currentGamePlayer && (
+        <div className="mt-5 border-t border-slate-800 pt-4">
+          <h3 className="font-semibold">Tablero sincronizado</h3>
+
+          <p className="mt-1 text-sm text-slate-400">
+            Tu posición: X = {currentGamePlayer.x}, Y = {currentGamePlayer.y}
+          </p>
+
+          <p className="mt-1 text-xs text-slate-500">
+            Las posiciones mostradas provienen del servidor.
+          </p>
+
+          <div className="mt-4 overflow-x-auto">
+            <div className="w-fit rounded-lg border border-slate-700 p-1">
+              {gameState.map.map((row, y) => (
+                <div className="flex" key={y}>
+                  {Array.from(row).map((tile, x) => {
+                    const player = otherPlayers.find(
+                      (candidate) =>
+                        candidate.x === x && candidate.y === y
+                    );
+
+                    return (
+                      <div
+                        key={x}
+                        title={
+                          player
+                            ? `${player.name} (${x}, ${y})`
+                            : tile === "#"
+                              ? "Pared"
+                              : "Camino"
+                        }
+                        className={[
+                          "flex h-7 w-7 items-center justify-center border border-slate-800 text-xs",
+                          tile === "#" ? "bg-slate-700" : "bg-slate-950",
+                          player?.id === socketRef.current?.id
+                            ? "text-cyan-300"
+                            : player
+                              ? "text-amber-300"
+                              : "text-transparent",
+                        ].join(" ")}
+                      >
+                        {player
+                          ? player.name.slice(0, 1).toUpperCase()
+                          : ""}
+                      </div>
+                    );
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="mt-4 flex flex-col items-center gap-1">
+            <button
+              type="button"
+              aria-label="Mover arriba"
+              onClick={() => move("up")}
+              className="h-11 w-14 rounded-lg border border-slate-600 bg-slate-800 text-xl hover:bg-slate-700"
+            >
+              ↑
+            </button>
+
+            <div className="flex gap-1">
+              <button
+                type="button"
+                aria-label="Mover a la izquierda"
+                onClick={() => move("left")}
+                className="h-11 w-14 rounded-lg border border-slate-600 bg-slate-800 text-xl hover:bg-slate-700"
+              >
+                ←
+              </button>
+
+              <button
+                type="button"
+                aria-label="Mover abajo"
+                onClick={() => move("down")}
+                className="h-11 w-14 rounded-lg border border-slate-600 bg-slate-800 text-xl hover:bg-slate-700"
+              >
+                ↓
+              </button>
+
+              <button
+                type="button"
+                aria-label="Mover a la derecha"
+                onClick={() => move("right")}
+                className="h-11 w-14 rounded-lg border border-slate-600 bg-slate-800 text-xl hover:bg-slate-700"
+              >
+                →
+              </button>
+            </div>
+          </div>
+
+          <p className="mt-3 text-xs leading-5 text-slate-500">
+            Prueba los movimientos con dos pestañas abiertas. Las paredes y
+            las casillas ocupadas son validadas por el servidor.
+          </p>
+        </div>
+      )}
     </section>
   );
 }

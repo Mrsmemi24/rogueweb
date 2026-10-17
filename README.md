@@ -1,36 +1,28 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# RogueWeb: Echoes of the Grid
 
-## Getting Started
+## Local development
 
-First, run the development server:
+Install dependencies once from the repository root:
+
+```bash
+npm install
+npm --prefix server install
+```
+
+Start the game web app in one terminal:
 
 ```bash
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000) and select **Jugar** (or open `/jugar` directly). The single-player dungeon runs locally and does not need the lobby server.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+To use the multiplayer test lobby, start its Socket.IO server in a second terminal:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm run dev:socket
+```
 
-## Learn More
+The web app uses `http://127.0.0.1:3001` for the lobby by default. The server exposes `http://127.0.0.1:3001/health` for a health check. Override the web port with `PORT` when running Next.js, the socket server port with `PORT` in `server`, and the socket URL with `NEXT_PUBLIC_SOCKET_URL` in the web app environment.
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+The game board is generated in Phaser from canvas shapes; no external game assets or font downloads are required.

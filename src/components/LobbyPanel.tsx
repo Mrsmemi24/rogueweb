@@ -25,12 +25,15 @@ type ClientToServerEvents = {
 };
 
 const SOCKET_URL =
-  process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:3001";
+  process.env.NEXT_PUBLIC_SOCKET_URL || "http://127.0.0.1:3001";
 
 export default function LobbyPanel() {
   const socketRef = useRef<
     Socket<ServerToClientEvents, ClientToServerEvents> | null
   >(null);
+  const joinedRoomRef = useRef<{ roomId: string; playerName: string } | null>(
+    null
+  );
 
   const [connected, setConnected] = useState(false);
   const [roomId, setRoomId] = useState("mazmorra-1");
@@ -39,29 +42,51 @@ export default function LobbyPanel() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const socket: Socket<ServerToClientEvents, ClientToServerEvents> =
-      io(SOCKET_URL);
+    const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(
+      SOCKET_URL,
+      {
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1_000,
+        reconnectionDelayMax: 5_000,
+        timeout: 10_000,
+      }
+    );
     socketRef.current = socket;
 
     const handleConnect = () => {
       setConnected(true);
       setError("");
+
+      if (joinedRoomRef.current) {
+        socket.emit("lobby:join", joinedRoomRef.current);
+      }
     };
 
-    const handleDisconnect = () => {
+    const handleDisconnect = (reason: string) => {
       setConnected(false);
       setLobby(null);
+      console.warn(`Lobby server disconnected (${reason}); reconnecting.`);
+      setError("Conexión perdida. Intentando reconectar con el servidor...");
     };
 
-    const handleConnectError = () => {
+    const handleConnectError = (cause: Error) => {
       setConnected(false);
+      console.error(
+        `Could not connect to the lobby server at ${SOCKET_URL}:`,
+        cause
+      );
       setError(
-        "No se pudo conectar al servidor. Comprueba que esté ejecutándose."
+        `No se pudo conectar al servidor en ${SOCKET_URL}. Comprueba que esté ejecutándose.`
       );
     };
 
     const handleLobbyState = (state: LobbyState) => {
       setLobby(state);
+      joinedRoomRef.current = {
+        roomId: state.roomId,
+        playerName: joinedRoomRef.current?.playerName ?? playerName,
+      };
       setError("");
     };
 
@@ -97,6 +122,7 @@ export default function LobbyPanel() {
 
     setError("");
     setLobby(null);
+    joinedRoomRef.current = { roomId, playerName };
 
     socket.emit("lobby:join", {
       roomId,

@@ -1,3 +1,4 @@
+import Link from "next/link";
 import LobbyPanel from "@/components/LobbyPanel";
 
 export default function Home() {
@@ -19,6 +20,13 @@ export default function Home() {
           Explora mazmorras, enfrenta enemigos y sobrevive en un
           mundo generado proceduralmente. Cada decisión cuenta.
         </p>
+
+        <Link
+          href="/jugar"
+          className="mt-8 w-fit rounded-lg bg-cyan-500 px-5 py-3 font-bold text-slate-950 hover:bg-cyan-400"
+        >
+          Jugar ahora
+        </Link>
 
         <div className="mt-10 grid gap-4 sm:grid-cols-3">
           <article className="rounded-xl border border-slate-700 bg-slate-900 p-5">

@@ -11,11 +11,21 @@ type GamePlayer = {
   name: string;
   x: number;
   y: number;
+  hp: number;
+  maxHp: number;
+  level: number;
+  xp: number;
+  status: "alive" | "defeated";
 };
 
 type GameState = {
   roomId: string;
+  seed: number;
   map: string[];
+  exit: {
+    x: number;
+    y: number;
+  };
   players: GamePlayer[];
 };
 
@@ -54,6 +64,7 @@ export default function AuthoritativeCanvas({
 
     class AuthoritativeScene extends Phaser.Scene {
       private graphics!: Phaser.GameObjects.Graphics;
+      private exitMarker!: Phaser.GameObjects.Rectangle;
 
       private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
       private wasd?: Record<string, Phaser.Input.Keyboard.Key>;
@@ -73,6 +84,10 @@ export default function AuthoritativeCanvas({
 
       create() {
         this.graphics = this.add.graphics();
+        this.exitMarker = this.add
+          .rectangle(0, 0, this.tileSize * 0.55, this.tileSize * 0.55, 0x4ade80)
+          .setDepth(1)
+          .setVisible(false);
 
         const keyboard = this.input.keyboard;
 
@@ -157,6 +172,7 @@ export default function AuthoritativeCanvas({
         if (!state || state.map.length === 0) {
           this.graphics.clear();
           this.mapSignature = "";
+          this.exitMarker.setVisible(false);
 
           for (const view of this.playerViews.values()) {
             view.body.destroy();
@@ -173,7 +189,7 @@ export default function AuthoritativeCanvas({
         );
 
         this.tileSize = Math.max(
-          16,
+          8,
           Math.min(
             48,
             Math.floor((this.scale.width - 20) / columns),
@@ -203,6 +219,18 @@ export default function AuthoritativeCanvas({
           this.drawMap(state.map);
           this.mapSignature = signature;
         }
+
+        this.exitMarker
+          .setPosition(
+            this.offsetX +
+              state.exit.x * this.tileSize +
+              this.tileSize / 2,
+            this.offsetY +
+              state.exit.y * this.tileSize +
+              this.tileSize / 2
+          )
+          .setSize(this.tileSize * 0.55, this.tileSize * 0.55)
+          .setVisible(true);
 
         const activeIds = new Set(
           state.players.map((player) => player.id)
@@ -325,18 +353,33 @@ export default function AuthoritativeCanvas({
       type: Phaser.CANVAS,
       parent: host,
       backgroundColor: "#0b1120",
-      width: 800,
-      height: 440,
+      width: host.clientWidth || 800,
+      height: host.clientHeight || 440,
       scale: {
         mode: Phaser.Scale.RESIZE,
-        width: 800,
-        height: 440,
+        width: host.clientWidth || 800,
+        height: host.clientHeight || 440,
       },
       scene: [AuthoritativeScene],
     });
 
+    const resizeObserver = new ResizeObserver(() => {
+      const width = Math.floor(host.clientWidth);
+      const height = Math.floor(host.clientHeight);
+
+      if (width > 0 && height > 0) {
+        game.scale.resize(width, height);
+      }
+    });
+
+    resizeObserver.observe(host);
+
     return () => {
+      resizeObserver.disconnect();
       game.destroy(true);
+      host.querySelectorAll("canvas").forEach((canvas) => {
+        canvas.remove();
+      });
     };
   }, []);
 

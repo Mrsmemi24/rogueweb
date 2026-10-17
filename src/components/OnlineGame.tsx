@@ -1,8 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import dynamic from "next/dynamic";
 import { io, type Socket } from "socket.io-client";
-import AuthoritativeCanvas from "./AuthoritativeCanvas";
+
+const AuthoritativeCanvas = dynamic(
+  () => import("./AuthoritativeCanvas"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex h-[440px] items-center justify-center rounded-xl border border-slate-700 bg-slate-950 text-slate-300">
+        Cargando el tablero multijugador...
+      </div>
+    ),
+  }
+);
 
 type Direction = "up" | "down" | "left" | "right";
 
@@ -24,11 +36,21 @@ type GamePlayer = {
   name: string;
   x: number;
   y: number;
+  hp: number;
+  maxHp: number;
+  level: number;
+  xp: number;
+  status: "alive" | "defeated";
 };
 
 type GameState = {
   roomId: string;
+  seed: number;
   map: string[];
+  exit: {
+    x: number;
+    y: number;
+  };
   players: GamePlayer[];
 };
 
@@ -60,6 +82,9 @@ export default function OnlineGame() {
   >(null);
 
   const [connected, setConnected] = useState(false);
+  const [currentPlayerId, setCurrentPlayerId] = useState<
+    string | undefined
+  >();
   const [roomId, setRoomId] = useState("mazmorra-1");
   const [playerName, setPlayerName] = useState("Explorador");
   const [lobby, setLobby] = useState<LobbyState | null>(null);
@@ -74,11 +99,13 @@ export default function OnlineGame() {
 
     const onConnect = () => {
       setConnected(true);
+      setCurrentPlayerId(socket.id);
       setError("");
     };
 
     const onDisconnect = () => {
       setConnected(false);
+      setCurrentPlayerId(undefined);
       setLobby(null);
       setGameState(null);
     };
@@ -148,9 +175,11 @@ export default function OnlineGame() {
     socket.emit("game:move", { direction });
   };
 
-  const currentPlayerId = socketRef.current?.id;
-
   const currentPlayer = lobby?.players.find(
+    (player) => player.id === currentPlayerId
+  );
+
+  const currentGamePlayer = gameState?.players.find(
     (player) => player.id === currentPlayerId
   );
 
@@ -269,6 +298,25 @@ export default function OnlineGame() {
           currentPlayerId={currentPlayerId}
           onMove={move}
         />
+
+        {currentGamePlayer && (
+          <div
+            aria-label="Estadísticas del jugador"
+            className="mt-3 flex flex-wrap gap-x-4 gap-y-1 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm"
+          >
+            <span>
+              HP: {currentGamePlayer.hp}/{currentGamePlayer.maxHp}
+            </span>
+            <span>Nivel: {currentGamePlayer.level}</span>
+            <span>XP: {currentGamePlayer.xp}</span>
+            <span>
+              Estado:{" "}
+              {currentGamePlayer.status === "alive"
+                ? "Vivo"
+                : "Derrotado"}
+            </span>
+          </div>
+        )}
 
         {gameState && (
           <div className="mt-4 flex flex-col items-center gap-1 md:hidden">

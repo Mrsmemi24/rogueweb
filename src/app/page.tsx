@@ -1,5 +1,4 @@
 import Link from "next/link";
-import LobbyPanel from "@/components/LobbyPanel"; // Nota: Lo tienes importado pero no lo estás usando
 import OnlineGame from "@/components/OnlineGame";
 
 export default function JugarPage() {

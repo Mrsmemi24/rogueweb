@@ -23,11 +23,21 @@ type GamePlayer = {
   name: string;
   x: number;
   y: number;
+  hp: number;
+  maxHp: number;
+  level: number;
+  xp: number;
+  status: "alive" | "defeated";
 };
 
 type GameState = {
   roomId: string;
+  seed: number;
   map: string[];
+  exit: {
+    x: number;
+    y: number;
+  };
   players: GamePlayer[];
 };
 
@@ -326,6 +336,8 @@ export default function LobbyPanel() {
                       (candidate) =>
                         candidate.x === x && candidate.y === y
                     );
+                    const isExit =
+                      gameState.exit.x === x && gameState.exit.y === y;
 
                     return (
                       <div
@@ -333,9 +345,11 @@ export default function LobbyPanel() {
                         title={
                           player
                             ? `${player.name} (${x}, ${y})`
-                            : tile === "#"
-                              ? "Pared"
-                              : "Camino"
+                            : isExit
+                              ? "Salida"
+                              : tile === "#"
+                                ? "Pared"
+                                : "Camino"
                         }
                         className={[
                           "flex h-7 w-7 items-center justify-center border border-slate-800 text-xs",
@@ -344,12 +358,16 @@ export default function LobbyPanel() {
                             ? "text-cyan-300"
                             : player
                               ? "text-amber-300"
+                              : isExit
+                                ? "text-emerald-300"
                               : "text-transparent",
                         ].join(" ")}
                       >
                         {player
                           ? player.name.slice(0, 1).toUpperCase()
-                          : ""}
+                          : isExit
+                            ? "E"
+                            : ""}
                       </div>
                     );
                   })}
@@ -357,6 +375,12 @@ export default function LobbyPanel() {
               ))}
             </div>
           </div>
+
+          <p className="mt-3 text-sm text-slate-300">
+            HP: {currentGamePlayer.hp}/{currentGamePlayer.maxHp} · Nivel:{" "}
+            {currentGamePlayer.level} · XP: {currentGamePlayer.xp} · Estado:{" "}
+            {currentGamePlayer.status === "alive" ? "Vivo" : "Derrotado"}
+          </p>
 
           <div className="mt-4 flex flex-col items-center gap-1">
             <button

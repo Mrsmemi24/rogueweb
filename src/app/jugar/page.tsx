@@ -1,7 +1,6 @@
 
 import Link from "next/link";
-import GameCanvas from "@/components/GameCanvas";
-import TouchControls from "@/components/TouchControls";
+import OnlineGame from "@/components/OnlineGame";
 
 export default function JugarPage() {
   return (
@@ -24,31 +23,12 @@ export default function JugarPage() {
           </h1>
 
           <p className="mt-3 text-slate-400">
-            Explora los pasillos, derrota a los centinelas y encuentra
-            la salida sin perder toda tu vida.
+            Explora la mazmorra compartida. El servidor genera el mapa
+            y valida cada movimiento de los jugadores.
           </p>
         </header>
 
-        <GameCanvas />
-
-        <TouchControls />
-
-        <section className="mt-5 rounded-xl border border-slate-800 bg-slate-900 p-4">
-          <h2 className="font-bold">Controles</h2>
-
-          <p className="mt-2 text-sm text-slate-300">
-            PC: WASD o flechas para moverte; espacio para atacar.
-          </p>
-
-          <p className="mt-2 text-sm text-slate-300">
-            Móvil: usa el pad direccional y el botón ATACAR.
-          </p>
-
-          <p className="mt-2 text-sm text-slate-500">
-            Los enemigos persiguen al jugador después de cada acción
-            válida. La partida termina al alcanzar cero puntos de vida.
-          </p>
-        </section>
+        <OnlineGame />
       </div>
     </main>
   );

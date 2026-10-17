@@ -2,6 +2,7 @@
 import Link from "next/link";
 import GameCanvas from "@/components/GameCanvas";
 import TouchControls from "@/components/TouchControls";
+import LobbyPanel from "@/components/LobbyPanel";
 
 export default function JugarPage() {
   return (
@@ -52,4 +53,5 @@ export default function JugarPage() {
       </div>
     </main>
   );
+  <LobbyPanel />
 }

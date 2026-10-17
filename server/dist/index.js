@@ -1,7 +1,9 @@
 import { createServer } from "node:http";
 import { Server } from "socket.io";
 import { z } from "zod";
+const HOST = "127.0.0.1";
 const PORT = Number(process.env.PORT ?? 3001);
+<<<<<<< HEAD
 const ALLOWED_ORIGIN = process.env.CLIENT_ORIGIN ?? "http://localhost:3000";
 // Tablero de prueba compartido por todos los clientes.
 const GAME_MAP = [
@@ -19,6 +21,13 @@ const SPAWNS = [
     { x: 1, y: 5 },
     { x: 7, y: 5 },
 ];
+=======
+const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN;
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65_535) {
+    throw new Error(`Invalid PORT value: ${process.env.PORT}`);
+}
+// Validamos los datos que llegan desde el navegador.
+>>>>>>> 83840fb59d24a3d7a859b92c657cad2364a52551
 const JoinRoomSchema = z
     .object({
     roomId: z
@@ -59,7 +68,15 @@ const httpServer = createServer((request, response) => {
 });
 const io = new Server(httpServer, {
     cors: {
-        origin: ALLOWED_ORIGIN,
+        origin: (origin, callback) => {
+            const isLocalOrigin = origin === undefined ||
+                /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(origin);
+            if (isLocalOrigin || origin === CLIENT_ORIGIN) {
+                callback(null, true);
+                return;
+            }
+            callback(new Error(`Origin not allowed: ${origin}`));
+        },
         methods: ["GET", "POST"],
     },
 });
@@ -250,6 +267,6 @@ io.on("connection", (socket) => {
         console.log(`Cliente desconectado: ${socket.id}`);
     });
 });
-httpServer.listen(PORT, () => {
-    console.log(`RogueWeb Socket.IO escuchando en http://localhost:${PORT}`);
+httpServer.listen(PORT, HOST, () => {
+    console.log(`RogueWeb Socket.IO escuchando en http://${HOST}:${PORT}`);
 });

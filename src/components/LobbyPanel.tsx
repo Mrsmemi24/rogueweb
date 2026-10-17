@@ -51,14 +51,19 @@ type ClientToServerEvents = {
 };
 
 const SOCKET_URL =
-  process.env.NEXT_PUBLIC_SOCKET_URL ?? "http://localhost:3001";
+  process.env.NEXT_PUBLIC_SOCKET_URL || "http://127.0.0.1:3001";
 
 export default function LobbyPanel() {
   const socketRef = useRef<
     Socket<ServerToClientEvents, ClientToServerEvents> | null
   >(null);
 
+  const joinedRoomRef = useRef<{ roomId: string; playerName: string } | null>(
+    null
+  );
+
   const [connected, setConnected] = useState(false);
+  const [socketId, setSocketId] = useState("");
   const [roomId, setRoomId] = useState("mazmorra-1");
   const [playerName, setPlayerName] = useState("Explorador");
   const [lobby, setLobby] = useState<LobbyState | null>(null);
@@ -66,26 +71,53 @@ export default function LobbyPanel() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    const socket: Socket<ServerToClientEvents, ClientToServerEvents> =
-      io(SOCKET_URL);
+    const socket: Socket<ServerToClientEvents, ClientToServerEvents> = io(
+      SOCKET_URL,
+      {
+        reconnection: true,
+        reconnectionAttempts: Infinity,
+        reconnectionDelay: 1_000,
+        reconnectionDelayMax: 5_000,
+        timeout: 10_000,
+      }
+    );
 
     socketRef.current = socket;
 
     const handleConnect = () => {
       setConnected(true);
+      setSocketId(socket.id ?? "");
       setError("");
+
+      // Si ya estaba en una sala, vuelve a unirse automáticamente
+      if (joinedRoomRef.current) {
+        socket.emit("lobby:join", joinedRoomRef.current);
+      }
     };
 
-    const handleDisconnect = () => {
+    const handleDisconnect = (reason: string) => {
       setConnected(false);
+      setSocketId("");
       setLobby(null);
       setGameState(null);
+
+      console.warn(`Lobby server disconnected (${reason}); reconnecting.`);
+      setError("Conexión perdida. Intentando reconectar con el servidor...");
+
+      if (reason === "io server disconnect") {
+        socket.connect();
+      }
     };
 
-    const handleConnectError = () => {
+    const handleConnectError = (cause: Error) => {
       setConnected(false);
+      setSocketId("");
+      console.error(
+        `Could not connect to the lobby server at ${SOCKET_URL}:`,
+        cause
+      );
       setError(
-        "No se pudo conectar al servidor. Comprueba que esté activo."
+        `No se pudo conectar al servidor en ${SOCKET_URL}. Comprueba que esté ejecutándose.`
       );
     };
 
@@ -131,6 +163,8 @@ export default function LobbyPanel() {
     }
 
     setError("");
+    setLobby(null);
+    joinedRoomRef.current = { roomId, playerName };
 
     socket.emit("lobby:join", {
       roomId,
@@ -151,12 +185,12 @@ export default function LobbyPanel() {
   };
 
   const currentPlayer = lobby?.players.find(
-    (player) => player.id === socketRef.current?.id
+    (player) => player.id === socketId
   );
 
   // Jugador actual tomado del estado de juego (posición actualizada)
   const currentGamePlayer = gameState?.players.find(
-    (player) => player.id === socketRef.current?.id
+    (player) => player.id === socketId
   );
 
   const toggleReady = () => {
@@ -253,7 +287,7 @@ export default function LobbyPanel() {
               >
                 <span className="truncate">
                   {player.name}
-                  {player.id === socketRef.current?.id ? " (tú)" : ""}
+                  {player.id === socketId ? " (tú)" : ""}
                 </span>
 
                 <span
@@ -306,7 +340,7 @@ export default function LobbyPanel() {
                         className={[
                           "flex h-7 w-7 items-center justify-center border border-slate-800 text-xs",
                           tile === "#" ? "bg-slate-700" : "bg-slate-950",
-                          player?.id === socketRef.current?.id
+                          player?.id === socketId
                             ? "text-cyan-300"
                             : player
                               ? "text-amber-300"

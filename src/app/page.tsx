@@ -1,5 +1,5 @@
-
 import Link from "next/link";
+import LobbyPanel from "@/components/LobbyPanel"; // Nota: Lo tienes importado pero no lo estás usando
 import OnlineGame from "@/components/OnlineGame";
 
 export default function JugarPage() {
@@ -27,6 +27,23 @@ export default function JugarPage() {
             en el servidor.
           </p>
         </header>
+        
+        <Link
+          href="/jugar"
+          className="mt-8 w-fit rounded-lg bg-cyan-500 px-5 py-3 font-bold text-slate-950 hover:bg-cyan-400"
+        >
+          Jugar ahora
+        </Link>
+
+        <div className="mt-10 grid gap-4 sm:grid-cols-3">
+          <article className="rounded-xl border border-slate-700 bg-slate-900 p-5">
+            <h2 className="text-lg font-bold">01. Exploración</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-400">
+              Mapas de cuadrícula creados mediante generación procedural.
+            </p>
+          </article>
+          {/* Si tu grid es de 3 columnas (sm:grid-cols-3), aquí irían los otros dos <article> */}
+        </div>
 
         <OnlineGame />
       </div>

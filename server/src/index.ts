@@ -3,9 +3,13 @@ import { createServer } from "node:http";
 import { Server } from "socket.io";
 import { z } from "zod";
 
+const HOST = "127.0.0.1";
 const PORT = Number(process.env.PORT ?? 3001);
-const ALLOWED_ORIGIN =
-  process.env.CLIENT_ORIGIN ?? "http://localhost:3000";
+const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN;
+
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65_535) {
+  throw new Error(`Invalid PORT value: ${process.env.PORT}`);
+}
 
 // Tablero de prueba compartido por todos los clientes.
 const GAME_MAP = [
@@ -83,7 +87,10 @@ interface ServerToClientEvents {
   "app:error": (payload: { message: string }) => void;
 }
 
-interface InterServerEvents {}
+type InterServerEvents = Record<
+  string,
+  (...args: never[]) => void
+>;
 
 interface SocketData {
   roomId?: string;
@@ -119,7 +126,18 @@ const io = new Server<
   SocketData
 >(httpServer, {
   cors: {
-    origin: ALLOWED_ORIGIN,
+    origin: (origin, callback) => {
+      const isLocalOrigin =
+        origin === undefined ||
+        /^http:\/\/(?:localhost|127\.0\.0\.1)(?::\d+)?$/.test(origin);
+
+      if (isLocalOrigin || origin === CLIENT_ORIGIN) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error(`Origin not allowed: ${origin}`));
+    },
     methods: ["GET", "POST"],
   },
 });
@@ -375,8 +393,8 @@ io.on("connection", (socket) => {
   });
 });
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, HOST, () => {
   console.log(
-    `RogueWeb Socket.IO escuchando en http://localhost:${PORT}`
+    `RogueWeb Socket.IO escuchando en http://${HOST}:${PORT}`
   );
 });

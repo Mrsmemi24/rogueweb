@@ -1,4 +1,5 @@
 import LobbyPanel from "@/components/LobbyPanel";
+
 export default function Home() {
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -41,6 +42,9 @@ export default function Home() {
             </p>
           </article>
         </div>
+
+        {/* Lobby multijugador */}
+        <LobbyPanel />
 
         <p className="mt-10 text-sm text-slate-500">
           Fase 2 · Paso 1 — Preparación del proyecto

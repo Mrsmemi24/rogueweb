@@ -70,6 +70,7 @@ type GameState = {
   };
   players: GamePlayer[];
   enemies: GameEnemy[];
+  status: "active" | "victory" | "defeat";
 };
 
 type ServerToClientEvents = {
@@ -132,6 +133,11 @@ export default function OnlineGame() {
       return;
     }
 
+    if (gameState.status !== "active") {
+      stopMoving();
+      return;
+    }
+
     if (
       gameState.players.find((player) => player.id === currentPlayerId)
         ?.status !== "alive"
@@ -147,12 +153,20 @@ export default function OnlineGame() {
     (direction: Direction) => {
       stopMoving();
       move(direction);
+      if (
+        !gameState ||
+        gameState.status !== "active" ||
+        gameState.players.find((player) => player.id === currentPlayerId)
+          ?.status !== "alive"
+      ) {
+        return;
+      }
       movementIntervalRef.current = window.setInterval(
         () => moveRef.current(direction),
         180
       );
     },
-    [move, stopMoving]
+    [currentPlayerId, gameState, move, stopMoving]
   );
 
   const stopIfPointerLeaves = useCallback(
@@ -178,7 +192,13 @@ export default function OnlineGame() {
     const player = gameState?.players.find(
       (candidate) => candidate.id === currentPlayerId
     );
-    if (!gameState || player?.status === "defeated") stopMoving();
+    if (
+      !gameState ||
+      gameState.status !== "active" ||
+      player?.status === "defeated"
+    ) {
+      stopMoving();
+    }
   }, [currentPlayerId, gameState, stopMoving]);
 
   useEffect(() => {
@@ -277,6 +297,8 @@ export default function OnlineGame() {
       setError("Primero entra en una sala.");
       return;
     }
+
+    if (gameState.status !== "active") return;
 
     if (
       gameState.players.find((player) => player.id === currentPlayerId)
@@ -410,6 +432,24 @@ export default function OnlineGame() {
           onMove={move}
           onAttack={attack}
         />
+
+        {gameState?.status === "victory" && (
+          <p
+            role="status"
+            className="mt-3 rounded-lg border border-emerald-500/40 bg-emerald-950 px-3 py-2 font-bold text-emerald-200"
+          >
+            ¡Victoria! Un jugador alcanzó la salida. La partida de la sala ha
+            terminado.
+          </p>
+        )}
+        {gameState?.status === "defeat" && (
+          <p
+            role="status"
+            className="mt-3 rounded-lg border border-red-500/40 bg-red-950 px-3 py-2 font-bold text-red-200"
+          >
+            Derrota: todos los jugadores han sido derrotados.
+          </p>
+        )}
 
         {gameState && gameState.players.length > 0 && (
           <div

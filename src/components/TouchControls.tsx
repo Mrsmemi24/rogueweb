@@ -1,6 +1,9 @@
 
 "use client";
 
+import { useCallback, useEffect, useRef } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
+
 type Direction = "up" | "down" | "left" | "right";
 
 function sendMove(direction: Direction) {
@@ -11,6 +14,22 @@ function sendMove(direction: Direction) {
   );
 }
 
+function stopWhenPointerLeaves(
+  event: ReactPointerEvent<HTMLButtonElement>,
+  stopMoving: () => void
+) {
+  const bounds = event.currentTarget.getBoundingClientRect();
+
+  if (
+    event.clientX < bounds.left ||
+    event.clientX > bounds.right ||
+    event.clientY < bounds.top ||
+    event.clientY > bounds.bottom
+  ) {
+    stopMoving();
+  }
+}
+
 function sendAttack() {
   window.dispatchEvent(new Event("rogueweb:attack"));
 }
@@ -19,9 +38,62 @@ const buttonClass =
   "flex h-14 w-14 items-center justify-center rounded-xl " +
   "border border-slate-600 bg-slate-800 text-2xl font-bold " +
   "text-cyan-300 active:scale-95 active:bg-slate-700 " +
-  "select-none touch-manipulation";
+  "select-none touch-none";
 
 export default function TouchControls() {
+  const movementIntervalRef = useRef<number | null>(null);
+
+  const stopMoving = useCallback(() => {
+    if (movementIntervalRef.current !== null) {
+      window.clearInterval(movementIntervalRef.current);
+      movementIntervalRef.current = null;
+    }
+  }, []);
+
+  const startMoving = useCallback(
+    (direction: Direction) => {
+      stopMoving();
+      sendMove(direction);
+      movementIntervalRef.current = window.setInterval(
+        () => sendMove(direction),
+        180
+      );
+    },
+    [stopMoving]
+  );
+
+  useEffect(() => {
+    const stopOnFocusLoss = () => stopMoving();
+    const stopWhenHidden = () => {
+      if (document.hidden) stopMoving();
+    };
+
+    window.addEventListener("pointerup", stopOnFocusLoss);
+    window.addEventListener("pointercancel", stopOnFocusLoss);
+    window.addEventListener("blur", stopOnFocusLoss);
+    document.addEventListener("visibilitychange", stopWhenHidden);
+
+    return () => {
+      stopMoving();
+      window.removeEventListener("pointerup", stopOnFocusLoss);
+      window.removeEventListener("pointercancel", stopOnFocusLoss);
+      window.removeEventListener("blur", stopOnFocusLoss);
+      document.removeEventListener("visibilitychange", stopWhenHidden);
+    };
+  }, [stopMoving]);
+
+  const beginPointerMove = (
+    event: ReactPointerEvent<HTMLButtonElement>,
+    direction: Direction
+  ) => {
+    event.preventDefault();
+    startMoving(direction);
+  };
+
+  const cancelIfPointerLeaves = (
+    event: ReactPointerEvent<HTMLButtonElement>
+  ) => stopWhenPointerLeaves(event, stopMoving);
+
   return (
     <section className="mt-4 flex items-center justify-between gap-4 md:hidden">
       <div
@@ -33,7 +105,10 @@ export default function TouchControls() {
           type="button"
           className={buttonClass}
           aria-label="Mover arriba"
-          onClick={() => sendMove("up")}
+          onPointerDown={(event) => beginPointerMove(event, "up")}
+          onPointerMove={cancelIfPointerLeaves}
+          onPointerLeave={stopMoving}
+          onPointerCancel={stopMoving}
         >
           ↑
         </button>
@@ -43,7 +118,10 @@ export default function TouchControls() {
           type="button"
           className={buttonClass}
           aria-label="Mover a la izquierda"
-          onClick={() => sendMove("left")}
+          onPointerDown={(event) => beginPointerMove(event, "left")}
+          onPointerMove={cancelIfPointerLeaves}
+          onPointerLeave={stopMoving}
+          onPointerCancel={stopMoving}
         >
           ←
         </button>
@@ -52,7 +130,10 @@ export default function TouchControls() {
           type="button"
           className={buttonClass}
           aria-label="Mover abajo"
-          onClick={() => sendMove("down")}
+          onPointerDown={(event) => beginPointerMove(event, "down")}
+          onPointerMove={cancelIfPointerLeaves}
+          onPointerLeave={stopMoving}
+          onPointerCancel={stopMoving}
         >
           ↓
         </button>
@@ -61,7 +142,10 @@ export default function TouchControls() {
           type="button"
           className={buttonClass}
           aria-label="Mover a la derecha"
-          onClick={() => sendMove("right")}
+          onPointerDown={(event) => beginPointerMove(event, "right")}
+          onPointerMove={cancelIfPointerLeaves}
+          onPointerLeave={stopMoving}
+          onPointerCancel={stopMoving}
         >
           →
         </button>

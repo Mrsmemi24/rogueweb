@@ -9,6 +9,7 @@ const ENEMY_DEFENSE = Math.floor((ENEMY_LEVEL - 1) / 3);
 const ENEMY_XP_REWARD = 50 + ENEMY_LEVEL * 25;
 const MAX_ROOM_ENEMIES = 3;
 const ATTACK_COOLDOWN_MS = 250;
+const MOVE_COOLDOWN_MS = 150;
 const XP_FOR_FIRST_LEVEL = 100;
 const LEVEL_HP_BONUS = 15;
 const LEVEL_ATTACK_BONUS = 3;
@@ -101,6 +102,7 @@ export function createRoomState(seed) {
         dungeon,
         players: new Map(),
         enemies: createEnemies(dungeon),
+        status: "active",
     };
 }
 export function createPlayer(id, name, position) {
@@ -150,6 +152,7 @@ export function toPublicGameState(roomId, room) {
         exit: { ...room.dungeon.exit },
         players: Array.from(room.players.values(), toPublicPlayerState),
         enemies: room.enemies.map(toPublicEnemyState),
+        status: room.status,
     };
 }
 export function toPublicEnemyState(enemy) {
@@ -175,7 +178,7 @@ export function getOrCreateRoom(rooms, roomId, seed) {
 export function findAvailableSpawn(room) {
     return room.dungeon.spawns.find((spawn) => !Array.from(room.players.values()).some((player) => player.x === spawn.x && player.y === spawn.y));
 }
-export function tryMovePlayer(room, playerId, direction) {
+export function tryMovePlayer(room, playerId, direction, now = Date.now()) {
     if (!isDirection(direction)) {
         return { ok: false, reason: "invalid-direction" };
     }
@@ -185,6 +188,13 @@ export function tryMovePlayer(room, playerId, direction) {
     }
     if (player.status === "defeated") {
         return { ok: false, reason: "defeated" };
+    }
+    if (room.status !== "active") {
+        return { ok: false, reason: "game-over" };
+    }
+    if (player.lastMoveAt !== undefined &&
+        now - player.lastMoveAt < MOVE_COOLDOWN_MS) {
+        return { ok: false, reason: "cooldown" };
     }
     const offset = DIRECTION_OFFSETS[direction];
     const nextX = player.x + offset.x;
@@ -212,7 +222,13 @@ export function tryMovePlayer(room, playerId, direction) {
     }
     player.x = nextX;
     player.y = nextY;
-    advanceEnemies(room);
+    player.lastMoveAt = now;
+    if (nextX === room.dungeon.exit.x && nextY === room.dungeon.exit.y) {
+        room.status = "victory";
+    }
+    else {
+        advanceEnemies(room);
+    }
     return { ok: true };
 }
 export function tryAttackPlayer(room, playerId, direction, now = Date.now()) {
@@ -225,6 +241,9 @@ export function tryAttackPlayer(room, playerId, direction, now = Date.now()) {
     }
     if (player.status === "defeated") {
         return { ok: false, reason: "defeated" };
+    }
+    if (room.status !== "active") {
+        return { ok: false, reason: "game-over" };
     }
     if (player.lastAttackAt !== undefined &&
         now - player.lastAttackAt < ATTACK_COOLDOWN_MS) {
@@ -301,6 +320,8 @@ function findEnemyStep(room, enemy, target) {
     return undefined;
 }
 export function advanceEnemies(room) {
+    if (room.status !== "active")
+        return;
     for (const enemy of room.enemies) {
         if (enemy.status !== "alive")
             continue;
@@ -324,5 +345,9 @@ export function advanceEnemies(room) {
             enemy.x = next.x;
             enemy.y = next.y;
         }
+    }
+    if (room.players.size > 0 &&
+        Array.from(room.players.values()).every((player) => player.status === "defeated")) {
+        room.status = "defeat";
     }
 }

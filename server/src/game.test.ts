@@ -29,6 +29,7 @@ function createRoom(seed = 42): RoomState {
     },
     players: new Map(),
     enemies: [],
+    status: "active",
   };
 }
 
@@ -130,6 +131,7 @@ describe("authoritative multiplayer room state", () => {
       seed: 42,
       map: ["#####", "#...#", "#####"],
       exit: { x: 3, y: 1 },
+      status: "active",
       players: [
         {
           id: "p1",
@@ -288,6 +290,19 @@ describe("authoritative multiplayer room state", () => {
     advanceEnemies(room);
     expect(defeatedPlayer.hp).toBe(0);
     expect(livingPlayer.hp).toBe(96);
+  });
+
+  it("marks a multiplayer room defeated when every player is defeated", () => {
+    const room = createRoom();
+    const player = createPlayer("p1", "One", { x: 1, y: 1 });
+    const enemy = addEnemy(room);
+    enemy.x = 2;
+    player.hp = 4;
+    room.players.set(player.id, player);
+
+    advanceEnemies(room);
+    expect(player).toMatchObject({ hp: 0, status: "defeated" });
+    expect(room.status).toBe("defeat");
   });
 
   it("rejects attacks from a distance and invalid directions", () => {
@@ -470,6 +485,47 @@ describe("authoritative multiplayer room state", () => {
 
     expect(tryMovePlayer(room, "p1", "right")).toEqual({ ok: true });
     expect(room.players.get("p1")).toMatchObject({ x: 2, y: 1 });
+  });
+
+  it("limits accepted movement rate without changing position on rejection", () => {
+    const room = createRoom();
+    const player = createPlayer("p1", "One", { x: 1, y: 1 });
+    room.players.set(player.id, player);
+
+    expect(tryMovePlayer(room, player.id, "right", 1_000)).toEqual({
+      ok: true,
+    });
+    expect(tryMovePlayer(room, player.id, "left", 1_149)).toEqual({
+      ok: false,
+      reason: "cooldown",
+    });
+    expect(player).toMatchObject({ x: 2, y: 1 });
+    expect(tryMovePlayer(room, player.id, "left", 1_150)).toEqual({
+      ok: true,
+    });
+    expect(player).toMatchObject({ x: 1, y: 1 });
+  });
+
+  it("wins the room when any player reaches the exit and blocks further actions", () => {
+    const room = createRoom();
+    const player = createPlayer("p1", "One", { x: 2, y: 1 });
+    const enemy = addEnemy(room);
+    enemy.x = 1;
+    room.players.set(player.id, player);
+
+    expect(tryMovePlayer(room, player.id, "right", 1_000)).toEqual({
+      ok: true,
+    });
+    expect(room.status).toBe("victory");
+    expect(toPublicGameState("alpha", room).status).toBe("victory");
+    expect(tryMovePlayer(room, player.id, "left", 1_200)).toEqual({
+      ok: false,
+      reason: "game-over",
+    });
+    expect(tryAttackPlayer(room, player.id, "left", 1_300)).toEqual({
+      ok: false,
+      reason: "game-over",
+    });
   });
 
   it.each([

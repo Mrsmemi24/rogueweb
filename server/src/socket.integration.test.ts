@@ -33,6 +33,7 @@ type GameState = {
   map: string[];
   players: PublicPlayer[];
   enemies: PublicEnemy[];
+  status: "active" | "victory" | "defeat";
 };
 
 const DIRECTIONS: Array<{
@@ -345,6 +346,7 @@ describe("Socket.IO authoritative combat", () => {
           x: currentPlayer.x + step.dx,
           y: currentPlayer.y + step.dy,
         };
+        await new Promise((resolve) => setTimeout(resolve, 155));
         const updates = [
           nextGameState(first, roomId, (state) => {
             const player = state.players.find(({ id }) => id === attackerId);

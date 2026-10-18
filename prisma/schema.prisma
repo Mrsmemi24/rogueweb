@@ -1,0 +1,23 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model MatchHistory {
+  id              String   @id @default(cuid())
+  playerId        String   // ID del jugador (puede ser socket.id o userId de OAuth)
+  playerName      String
+  levelReached    Int
+  enemiesDefeated Int
+  durationSeconds Int      // tiempo de la partida
+  inventory       Json     // JSON con el inventario
+  result          String   // "victory" | "defeat" | "abandoned"
+  createdAt       DateTime @default(now())
+
+  @@index([playerId])
+  @@index([createdAt])
+  @@index([levelReached])
+}

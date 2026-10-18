@@ -38,6 +38,7 @@ type GameState = {
   };
   players: GamePlayer[];
   enemies: GameEnemy[];
+  status: "active" | "victory" | "defeat";
 };
 
 type Props = {
@@ -193,6 +194,12 @@ export default function AuthoritativeCanvas({
         }
 
         if (!state) {
+          this.lastMoveDirection = undefined;
+          this.lastMoveAt = 0;
+          return;
+        }
+
+        if (state.status !== "active") {
           this.lastMoveDirection = undefined;
           this.lastMoveAt = 0;
           return;

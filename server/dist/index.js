@@ -102,6 +102,12 @@ io.on("connection", (socket) => {
             }
         }
         const targetRoom = rooms.get(roomId);
+        if (targetRoom && targetRoom.status !== "active") {
+            socket.emit("app:error", {
+                message: "La partida de esa sala ya terminó. Inicia una sala nueva.",
+            });
+            return;
+        }
         if (targetRoom &&
             targetRoom.players.size >= targetRoom.dungeon.spawns.length) {
             socket.emit("app:error", {
@@ -176,6 +182,8 @@ io.on("connection", (socket) => {
                 "invalid-direction": "Movimiento inválido.",
                 "player-not-found": "No se encontró al jugador en la sala.",
                 defeated: "Un jugador derrotado no puede moverse.",
+                "game-over": "La partida de esta sala ya terminó.",
+                cooldown: "Espera un instante antes de volver a moverte.",
                 "outside-map": "No puedes salir del tablero.",
                 wall: "Movimiento bloqueado por una pared.",
                 occupied: "Esa casilla ya está ocupada.",
@@ -211,6 +219,7 @@ io.on("connection", (socket) => {
                 "invalid-direction": "Dirección de ataque inválida.",
                 "player-not-found": "No se encontró al jugador en la sala.",
                 defeated: "Un jugador derrotado no puede atacar.",
+                "game-over": "La partida de esta sala ya terminó.",
                 cooldown: "Debes esperar antes de volver a atacar.",
                 "no-enemy": "No hay un centinela en esa dirección.",
             };

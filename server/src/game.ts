@@ -13,6 +13,7 @@ export type GameStatus = "active" | "victory" | "defeat";
 
 export type Player = {
   id: string;
+  userId?: string;
   name: string;
   ready: boolean;
   x: number;
@@ -24,6 +25,7 @@ export type Player = {
   level: number;
   xp: number;
   enemiesDefeated: number;
+  inventory?: string[];
   status: PlayerStatus;
   lastMoveAt?: number;
   lastAttackAt?: number;
@@ -63,6 +65,8 @@ export type PublicEnemyState = Pick<
 
 export type PublicGameState = {
   roomId: string;
+  matchId?: string;
+  hostPlayerId?: string;
   seed: number;
   map: string[];
   exit: Position;
@@ -76,6 +80,10 @@ export type RoomState = {
   players: Map<string, Player>;
   enemies: Enemy[];
   status: GameStatus;
+  hostUserId?: string;
+  matchId?: string;
+  startedAt?: number;
+  persistenceState?: "pending" | "saved" | "failed";
 };
 
 const PLAYER_ATTACK = 18;
@@ -237,13 +245,47 @@ export function createRoomState(seed: number): RoomState {
   };
 }
 
+export function restartRoomState(room: RoomState, seed: number) {
+  const fresh = createRoomState(seed);
+  const players = new Map<string, Player>();
+
+  for (const [key, previousPlayer] of room.players) {
+    const spawn = findAvailableSpawn({
+      ...fresh,
+      players,
+    });
+
+    if (!spawn) {
+      throw new Error("The new dungeon has no available player spawn");
+    }
+
+    const player = createPlayer(
+      previousPlayer.id,
+      previousPlayer.name,
+      spawn,
+      previousPlayer.userId
+    );
+    players.set(previousPlayer.userId ?? key, player);
+  }
+
+  room.dungeon = fresh.dungeon;
+  room.players = players;
+  room.enemies = fresh.enemies;
+  room.status = "active";
+  room.matchId = undefined;
+  room.startedAt = undefined;
+  room.persistenceState = undefined;
+}
+
 export function createPlayer(
   id: string,
   name: string,
-  position: Position
+  position: Position,
+  userId?: string
 ): Player {
   return {
     id,
+    ...(userId ? { userId, inventory: [] } : {}),
     name,
     ready: false,
     ...position,
@@ -297,6 +339,10 @@ export function toPublicGameState(
 ): PublicGameState {
   return {
     roomId,
+    ...(room.matchId ? { matchId: room.matchId } : {}),
+    ...(room.hostUserId && room.players.has(room.hostUserId)
+      ? { hostPlayerId: room.players.get(room.hostUserId)?.id }
+      : {}),
     seed: room.dungeon.seed,
     map: [...room.dungeon.map],
     exit: { ...room.dungeon.exit },

@@ -1,115 +1,89 @@
-# Auditoría final de requisitos — RogueWeb: Echoes of the Grid
+# Auditoría de requisitos — RogueWeb: Echoes of the Grid
 
-## Alcance y fuente oficial
+## Alcance y límites de verificación
 
-Se inspeccionó el repositorio real antes de cambiar código. No se encontró un
-documento oficial de requisitos, rúbrica, archivo de aceptación ni instrucción
-que defina qué debe contener el requisito de 10.000 registros. El README sí
-describe una carga de 10.000 partidas de muestra y existe un modelo
-`MatchHistory`; esto demuestra la implementación actual, no el significado
-oficial del requisito. Se necesita confirmación del profesor/cliente antes de
-asegurar que el total deba ser de partidas, usuarios u otra entidad.
+Esta auditoría corresponde al código actual del repositorio. No se encontró
+una rúbrica o documento oficial que defina el requisito de 10.000 registros.
+El usuario confirmó previamente una consulta de solo lectura con 10.000 filas
+existentes, pero no se repitió el conteo durante esta implementación. No se
+ejecutaron seeds, migraciones contra la base, `reset`, `drop` ni escrituras
+externas. La migración de idempotencia añadida al repositorio todavía requiere
+revisión y aprobación antes de aplicarse a Supabase.
 
-Los estados siguientes describen evidencia presente en el repositorio y
-verificaciones ejecutadas en este equipo. `PASS` no reemplaza pruebas manuales
-de dispositivo o de producción.
+`PASS` indica que la evidencia local descrita existe y que las pruebas citadas
+se ejecutaron. OAuth real, móvil físico, la base externa y un proveedor de
+alojamiento requieren verificación manual y no se marcan como aprobados.
 
 ## Matriz de requisitos
 
 | Requisito | Estado | Evidencia y verificación | Trabajo pendiente | Prioridad |
 |---|---|---|---|---|
-| Documento oficial y significado de las 10.000 filas | NEEDS MANUAL VERIFICATION | No se localizó especificación oficial. [`README.md`](../README.md), [`prisma/seed.ts`](../prisma/seed.ts) y [`check-count.mjs`](../check-count.mjs) hablan de partidas `MatchHistory`. | Obtener la rúbrica/fuente oficial y confirmar entidad, si son datos de prueba o partidas reales, y si el total debe ser exactamente 10.000 o al menos 10.000. | high |
-| Frontend Next.js, React, TypeScript, Phaser; rutas `/solo` y `/jugar` | PASS | [`package.json`](../package.json), [`src/app/solo/page.tsx`](../src/app/solo/page.tsx), [`src/app/jugar/page.tsx`](../src/app/jugar/page.tsx), componentes Phaser. `npm run build` y `npx tsc --noEmit` terminaron correctamente. | Pruebas manuales de navegador/dispositivo descritas abajo. | medium |
-| Backend Node.js/TypeScript y Socket.IO separado | PASS | [`server/package.json`](../server/package.json), [`server/src/index.ts`](../server/src/index.ts). `npm --prefix server run build` pasó. | Ninguno para el requisito local; aún falta despliegue. | low |
-| Prisma 7, PostgreSQL, migración y modelo `MatchHistory` | PASS | [`prisma/schema.prisma`](../prisma/schema.prisma) define los nueve campos solicitados e índices; [`prisma.config.ts`](../prisma.config.ts) configura schema, migraciones, seed y datasource; la migración inicial está aplicada. `npx prisma migrate status`: “Database schema is up to date!”. | Confirmar que la entidad/modelo coincide con la fuente oficial. | medium |
-| Total actual de registros requeridos | PASS, sujeto a confirmar el requisito oficial | [`check-count.mjs`](../check-count.mjs) consultó PostgreSQL sin imprimir la URL: `Total de partidas guardadas: 10000`; `Faltan para 10,000: 0`. Repetido después de los cambios: mismo resultado. | Confirmar que el requisito cuenta filas de `MatchHistory` y no otra tabla o conjunto de datos. | high |
-| Seed por lotes y repetición | NEEDS MANUAL VERIFICATION | [`prisma/seed.ts`](../prisma/seed.ts) cuenta la tabla completa, calcula el faltante y escribe lotes de hasta 500 mediante `createMany`. Con 10.000 filas, el código no inserta más. No se ejecutó `prisma db seed` durante esta auditoría, para evitar escrituras innecesarias. | La operación secuencial ya completada es no-op, pero dos seeds simultáneos pueden leer el mismo conteo e insertar filas duplicadas lógicamente: no existe clave única de semilla ni bloqueo. No ejecutar concurrentemente; decidir si hace falta reforzar concurrencia una vez aclarado el requisito. | medium |
-| Login OAuth, callback, sesiones y rutas protegidas | FAIL | No se encontraron proveedor/biblioteca OAuth, callbacks, modelo/almacén de sesión ni middleware/rutas de autorización. [`src/app/api/telemetry/route.ts`](../src/app/api/telemetry/route.ts) es una ruta pública GET y devuelve `playerId`, `playerName`, `inventory` y datos de partida. | Confirmar proveedor y URLs autorizadas; implementar autenticación, sesiones, autorización en cada endpoint y protección de los datos de telemetría. Requiere decisión y credenciales externas. | high |
-| Identidad autenticada en Socket.IO | FAIL | [`server/src/index.ts`](../server/src/index.ts) usa el `socket.id` emitido por Socket.IO para la identidad efímera y `playerName` proviene del payload del cliente. No hay middleware de autenticación ni identidad OAuth validada. El cliente no puede elegir directamente su `socket.id`, pero tampoco hay una identidad de usuario autenticada. | Validar la sesión/token en el handshake; vincular jugador a un identificador autenticado y no aceptar nombres como prueba de identidad. Coordinar con el proveedor OAuth aprobado. | high |
-| Membresía de sala y validación de payloads | PASS para salas públicas | Los eventos de ready/move/attack obtienen sala desde `socket.data.roomId` y jugador desde `socket.id`; no aceptan `roomId` ni coordenadas/damage en esos eventos. `JoinRoomSchema`, `ReadySchema`, `MoveIntentSchema` y `AttackIntentSchema` son estrictos y validan forma/rangos. [`server/src/game.test.ts`](../server/src/game.test.ts), [`server/src/index.ts`](../server/src/index.ts). | Las salas son públicas y el usuario elige un nombre/ID de sala. Si se necesitan salas privadas, definir autorización y códigos/tokens de invitación. | medium |
-| Rate limiting del servidor | FAIL para límites generales; PASS para cooldown de juego | [`server/src/game.ts`](../server/src/game.ts) aplica cooldown de 150 ms para movimiento y 250 ms para ataque. No hay límite general de eventos/conexiones por cliente ni protección contra inundación de `lobby:join`/payloads. | Añadir límite de mensajes/conexiones, idealmente complementado con límites del host/proxy. | high |
-| Movimiento, combate y estado multijugador autoritativo | PASS | [`server/src/game.ts`](../server/src/game.ts) calcula movimiento, colisiones, ataque, turnos de enemigos, HP, XP, nivel, derrota y estado público; el cliente envía intenciones. Pruebas de [`server/src/game.test.ts`](../server/src/game.test.ts) y [`server/src/socket.integration.test.ts`](../server/src/socket.integration.test.ts). Build backend y 40 pruebas pasaron. | Añadir casos de integración para payloads inválidos/eventos no autorizados si la matriz de pruebas de seguridad lo requiere. | medium |
-| Victoria, derrota y reinicio | PASS para estados terminales; FAIL para reinicio dentro del juego | El servidor fija victoria al llegar a la salida y derrota si todos los jugadores caen; bloquea acciones en salas terminadas. Las pruebas cubren victoria, HP cero, XP y progresión. No hay acción/control de reinicio de sala: la sala se elimina cuando el último socket sale; volver a entrar crea otra partida. | Añadir flujo de abandonar/reiniciar acordado, o documentar que salir y volver a crear sala es el flujo esperado. | medium |
-| Desconexión y reconexión | PASS para limpieza; FAIL para reanudar estado | [`server/src/index.ts`](../server/src/index.ts) elimina al jugador desconectado y borra la sala cuando queda vacía. [`src/components/OnlineGame.tsx`](../src/components/OnlineGame.tsx) limpia estado al desconectar, pero no restaura la partida/identidad al reconectar; la nueva conexión necesita unirse otra vez y obtiene otro `socket.id`. | Definir si la reconexión debe recuperar estado. Si sí, usar identidad autenticada y una política de reconexión/expiración persistente. | medium |
-| Guardar al completar una partida en PostgreSQL | FAIL (si es requisito) | El esquema tiene `MatchHistory`; [`src/app/api/telemetry/route.ts`](../src/app/api/telemetry/route.ts) solo ejecuta `findMany`/`count`; no se encontró `create`, `createMany` ni llamada del servidor de juego a Prisma. El seed crea datos de muestra, no guarda partidas reales. | Confirmar si el guardado de partidas reales es obligatorio. Si lo es, guardar desde lógica confiable del servidor al terminar y validar los campos/resultado; nunca confiar en estadísticas finales del navegador. | high |
-| Controles de PC y móvil en ambos modos | NEEDS MANUAL VERIFICATION | PC: Phaser registra WASD/flechas y espacio en [`src/components/PhaserGame.tsx`](../src/components/PhaserGame.tsx) y [`src/components/AuthoritativeCanvas.tsx`](../src/components/AuthoritativeCanvas.tsx). Móvil: [`src/components/TouchControls.tsx`](../src/components/TouchControls.tsx) para solo y controles pointer en [`src/components/OnlineGame.tsx`](../src/components/OnlineGame.tsx); se detienen al soltar/cancelar/perder foco. | Probar físicamente teclado y táctil en ambos modos, incluyendo arrastrar fuera del botón, cambio de pestaña y foco perdido. | medium |
-| Pruebas automatizadas locales | PASS | Después del cambio: `npm test -- --reporter=dot`: 63 pruebas/6 archivos; `npm --prefix server test -- --reporter=dot`: 40 pruebas/3 archivos; `npx tsc --noEmit`, `npm run lint`, `npm run build` y build backend pasaron. | Las pruebas no sustituyen la revisión manual ni cubren OAuth/producción, no implementados. | low |
-| GitHub Actions CI | PASS para configuración y checks locales | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) ejecuta build, TypeScript, tests y lint frontend; build/tests backend en `push` y `pull_request`. No requiere PostgreSQL hoy porque los tests no son tests de integración DB. | No se verificó una ejecución alojada de Actions en GitHub. Agregar servicio PostgreSQL/secrets de prueba si se añaden pruebas DB. | medium |
-| Despliegue, CORS, HTTPS/WSS y DB en producción | FAIL / NEEDS MANUAL VERIFICATION | [`README.md`](../README.md) solo documenta desarrollo local. [`server/src/index.ts`](../server/src/index.ts) escucha en `127.0.0.1`, por lo que no acepta conexiones externas en un despliegue normal. CORS permite `CLIENT_ORIGIN`, orígenes localhost/127.0.0.1 y solicitudes sin cabecera `Origin`; el cliente usa `NEXT_PUBLIC_SOCKET_URL`. No hay proveedor/URL de despliegue definido. | Elegir host que soporte WebSocket persistente; enlazar interfaz de red adecuada; configurar origin exacto y política para solicitudes sin `Origin`, HTTPS/WSS, callback OAuth, `DATABASE_URL` y conectividad PostgreSQL en el host. Verificar conexión desde producción. | high |
-| Protección de secretos | PASS en control de versiones; no auditado en proveedor remoto | [`.gitignore`](../.gitignore) excluye `.env*`; los comandos de conteo/migración no imprimieron valores de conexión. | Confirmar permisos/rotación en el host elegido; no subir valores reales al repositorio o logs. | high |
+| Rúbrica oficial y significado de las 10.000 filas | NEEDS MANUAL VERIFICATION | No se localizó una fuente oficial. [`README.md`](../README.md) y [`prisma/seed.ts`](../prisma/seed.ts) describen `MatchHistory`, pero no prueban qué pide la rúbrica. | Confirmar si son partidas, usuarios u otra entidad, y si se requiere exactamente 10.000 o al menos esa cantidad. | high |
+| Conteo de registros existente y conservación de muestras | NEEDS MANUAL VERIFICATION | El usuario confirmó previamente un conteo de solo lectura de 10.000 filas. En esta continuación no se volvió a consultar la base; no se ejecutó el seed ni ninguna operación DB de escritura. | Repetir conteo de solo lectura aprobado si se necesita evidencia actual. No volver a ejecutar el seed contra la base existente. | high |
+| Frontend Next.js, React, TypeScript y Phaser; modos `/solo` y `/jugar` | PASS | [`src/app/solo/page.tsx`](../src/app/solo/page.tsx), [`src/app/jugar/page.tsx`](../src/app/jugar/page.tsx), [`src/components/PhaserGame.tsx`](../src/components/PhaserGame.tsx) y [`src/components/OnlineGame.tsx`](../src/components/OnlineGame.tsx). El build de producción y `npx tsc --noEmit` finalizaron correctamente. | Ejecutar la comprobación manual de escritorio y móvil descrita abajo. | medium |
+| Backend Socket.IO separado y estado autoritativo | PASS | [`server/src/index.ts`](../server/src/index.ts), [`server/src/game.ts`](../server/src/game.ts); movimiento, colisiones, combate, turnos, HP, XP y estados terminales se calculan en backend. Las pruebas de juego y Socket.IO comprueban estado compartido, payloads manipulados y límites. | Ninguno para la ejecución local; despliegue pendiente. | medium |
+| Prisma 7, PostgreSQL, modelo e idempotencia de historial | PASS para el esquema local; NEEDS MANUAL VERIFICATION para la base | [`prisma/schema.prisma`](../prisma/schema.prisma) conserva los campos existentes y agrega `matchId` nullable con unicidad `(matchId, playerId)`. [`prisma/migrations/20261018190000_match_history_idempotency/migration.sql`](../prisma/migrations/20261018190000_match_history_idempotency/migration.sql) es aditiva. `npx prisma validate` y `npx prisma generate` pasaron con una URL ficticia local; no contactaron PostgreSQL. | Revisar y aprobar la migración antes de aplicarla a Supabase; no se aplicó en esta tarea. | high |
+| Seed seguro al repetir | PASS para repetición secuencial; NEEDS MANUAL VERIFICATION para concurrencia | [`prisma/seed.ts`](../prisma/seed.ts) cuenta todas las filas, calcula el faltante y usa lotes `createMany` de hasta 500. No borra datos. | Dos procesos concurrentes aún pueden insertar filas lógicas duplicadas por la estrategia count-then-insert. No se ejecutó el seed. | medium |
+| OAuth, sesiones y protección de `/jugar` | NEEDS MANUAL VERIFICATION | [`src/auth.ts`](../src/auth.ts) integra Auth.js con GitHub y sesión JWT; la identidad se construye en servidor como `github:<providerAccountId>`. [`src/app/jugar/page.tsx`](../src/app/jugar/page.tsx) requiere sesión; `/solo` no. [`src/app/api/socket-token/route.test.ts`](../src/app/api/socket-token/route.test.ts) prueba sesión ausente, emisión y fallo cerrado; [`src/lib/socket-token.test.ts`](../src/lib/socket-token.test.ts) prueba firma/expiración. | Crear/configurar la OAuth App y verificar login, callback y logout localmente. La URL esperada es `/api/auth/callback/github`; no se usaron credenciales reales. | high |
+| Token e identidad Socket.IO | PASS en pruebas locales; NEEDS MANUAL VERIFICATION en OAuth real | [`src/app/api/socket-token/route.ts`](../src/app/api/socket-token/route.ts) emite token de 60 s sólo para una sesión autenticada. [`server/src/auth.ts`](../server/src/auth.ts) valida firma HS256, issuer, audience, subject y expiración. El socket desconecta al vencer el token y el cliente solicita uno nuevo al reconectar. | Confirmar configuración segura e igual de `SOCKET_AUTH_SECRET` en ambos procesos. | high |
+| Membresía, validación y autoridad de eventos | PASS para las rutas probadas | [`server/src/index.ts`](../server/src/index.ts) deriva usuario/sala del socket autenticado, aplica esquemas Zod estrictos y rechaza payloads que intentan suplantar `playerId`/`userId`. Las pruebas de integración cubren acciones sin membresía. Coordenadas, daño, HP, XP e inventario no son autoridad del navegador. | La sala es pública para quien conoce su ID; no existe concepto de salas privadas/invitaciones. | high |
+| Rate limiting de eventos y handshakes | PASS | [`server/src/rate-limit.ts`](../server/src/rate-limit.ts) limita eventos por ventana de 10 s, `lobby:join` a 8, limita handshakes por dirección remota directa, acota direcciones almacenadas y limpia estado de socket al desconectar. [`server/src/socket.integration.test.ts`](../server/src/socket.integration.test.ts) prueba que el noveno join no crea la sala destino. | Los límites y timers son en memoria y por proceso; no son distribuidos entre réplicas. El backend no confía en `X-Forwarded-For`. | high |
+| Persistencia de partidas terminales | NEEDS MANUAL VERIFICATION | [`server/src/match-history.ts`](../server/src/match-history.ts) prepara snapshots solo desde estado terminal, con identidad estable y datos sanitizados, y hace reintentos firmados. [`src/app/api/internal/match-history/route.ts`](../src/app/api/internal/match-history/route.ts) valida token, esquema y escribe con `createMany(skipDuplicates: true)`. Pruebas mock verifican resultado, participantes e idempotencia. | La escritura real a PostgreSQL no se probó; primero debe aplicarse la migración aprobada y configurarse `MATCH_HISTORY_URL`/`SOCKET_AUTH_SECRET`. Los errores quedan registrados sin el payload personal. | high |
+| API privada y pantalla de historial | PASS en pruebas de API; NEEDS MANUAL VERIFICATION visual | [`src/app/api/telemetry/route.ts`](../src/app/api/telemetry/route.ts) requiere sesión, filtra por `playerId` autenticado y pagina con límite máximo; no devuelve `inventory` ni registros de otros usuarios. [`src/app/historial/page.tsx`](../src/app/historial/page.tsx) y [`src/components/MatchHistory.tsx`](../src/components/MatchHistory.tsx) presentan fecha, resultado, nivel, duración y enemigos, con estados de carga, vacío y error. | Revisar el flujo en navegador con historial vacío y poblado; la API se probó con mocks, no DB real. | high |
+| Reconexión y sesiones Socket.IO duplicadas | PASS en integración | [`server/src/index.ts`](../server/src/index.ts) conserva al usuario durante `RECONNECT_GRACE_MS` (30 s por defecto), reanuda con el mismo ID de jugador, limpia al expirar y sustituye la conexión anterior. [`server/src/socket.integration.test.ts`](../server/src/socket.integration.test.ts) cubre reemplazo, reconexión dentro del período y limpieza tras expiración. | Estado en memoria: un reinicio del backend pierde salas y grace timers. | medium |
+| Reinicio de partida terminal | NEEDS MANUAL VERIFICATION | El backend solo permite reiniciar salas terminales al host autenticado; reinicia dungeon, jugadores, ready flags y metadatos. [`server/src/game.test.ts`](../server/src/game.test.ts) valida el reset; la integración valida rechazo de jugador no host y rechazo mientras la partida sigue activa. La UI expone el botón solo al host en estado terminal. | No se automatizó una partida completa hasta victoria/derrota seguida de reinicio en navegador; verificar manualmente ese recorrido. | medium |
+| Controles de escritorio/móvil | NEEDS MANUAL VERIFICATION | [`src/components/OnlineGame.tsx`](../src/components/OnlineGame.tsx) conserva teclado y controles táctiles, cancela movimiento en `pointerup`, `pointercancel`, pérdida de foco y ocultamiento; el ciclo táctil emite a 180 ms y el servidor impone cooldowns. | Probar en navegador móvil real, orientación, toque sostenido, cancelar gesto y volver a foco. | medium |
+| CI en GitHub Actions | PASS para workflow; NEEDS MANUAL VERIFICATION para ejecución alojada | [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) usa `npm ci` para ambas carpetas, Prisma validate/generate, frontend test/typecheck/lint/build y backend build/test, con credenciales ficticias y URL DB de CI. | No se consultó una ejecución alojada de GitHub Actions. | medium |
+| Avisos de dependencias | NEEDS MANUAL VERIFICATION | La instalación de dependencias al agregar Auth.js/JOSE reportó cinco avisos de severidad alta. No se ejecutó `npm audit fix` ni se cambiaron versiones transitivas por fuerza. | Ejecutar revisión de avisos y planear actualizaciones específicas; evitar fixes automáticos sin revisar compatibilidad. | high |
+| CORS, salud, apagado y despliegue | PASS en configuración local; NEEDS MANUAL VERIFICATION en host | [`server/src/index.ts`](../server/src/index.ts) ofrece `/health`, `HOST` configurable, `CLIENT_ORIGIN` exacto, no acepta origen ausente en producción y cierra sockets/timers en SIGINT/SIGTERM. [`README.md`](../README.md) detalla HTTPS/WSS, callbacks y variables por nombre. | Elegir un proveedor con WebSocket persistente; configurar `HOST=0.0.0.0`, origen y URL HTTPS en el host, TLS/WSS, OAuth callbacks y conectividad PostgreSQL. No se desplegó. | high |
+| Protección de secretos | PASS en el diff local inspeccionado | [`.gitignore`](../.gitignore) ignora `.env*` excepto [`.env.example`](../.env.example), que sólo contiene nombres y placeholders seguros. No se imprimió ni copió ningún valor local. | Configurar/rotar secretos en el proveedor cuando se elija; no compartirlos en chat ni subirlos al repositorio. | high |
 
-## Configuración y esquema observados
+## Prisma 7 y acceso a datos
 
-- El paquete raíz tiene scripts `dev`, `dev:socket`, `build`, `start`, `lint` y
-  `test`. El proyecto no declara scripts `typecheck` ni pruebas DB.
-- `server/` es un paquete npm separado con scripts `dev`, `build`, `start` y
-  `test`.
-- `prisma/schema.prisma` contiene únicamente el modelo `MatchHistory`, con
-  `id`, `playerId`, `playerName`, `levelReached`, `enemiesDefeated`,
-  `durationSeconds`, `inventory`, `result` y `createdAt`; hay índices por
-  jugador, fecha y nivel. El resultado es `String`, no un enum validado por
-  PostgreSQL.
-- `prisma.config.ts` lee `DATABASE_URL` mediante `env(...)`. No se incluyen
-  valores de variables ni URLs de conexión en este informe.
-- Hay una migración inicial aplicada. No se ejecutaron `migrate dev`, `db
-  push`, `db seed`, `reset`, `drop` ni otra operación de escritura.
+- [`src/lib/prisma.ts`](../src/lib/prisma.ts) inicializa Prisma 7 usando
+  `PrismaPg` y `DATABASE_URL`; mantiene el cliente en desarrollo.
+- El seed está configurado en [`prisma.config.ts`](../prisma.config.ts) y
+  [`prisma/seed.ts`](../prisma/seed.ts). No se ejecutó.
+- La nueva migración es aditiva y no ha sido aplicada a una base externa.
+- El flujo de generación Prisma se validó contra una URL PostgreSQL ficticia;
+  no se abrió conexión a esa URL.
 
-## Cambio correctivo aplicado en esta auditoría
+## Verificaciones ejecutadas en esta implementación
 
-La línea base del build fallaba al construir `PrismaClient` sin adaptador, lo
-que Prisma 7 exige. Se ajustó [`src/app/api/telemetry/route.ts`](../src/app/api/telemetry/route.ts)
-para usar `PrismaPg` con `DATABASE_URL` y se agregó
-[`src/app/api/telemetry/route.test.ts`](../src/app/api/telemetry/route.test.ts)
-para comprobar la respuesta paginada. El build ahora reconoce `/api/telemetry`
-como ruta dinámica y termina correctamente. El endpoint sigue siendo público;
-este cambio no implementa ni simula autenticación.
+| Comando | Resultado |
+|---|---|
+| `npx prisma validate` con URL ficticia CI | PASS: esquema válido |
+| `npx prisma generate` con URL ficticia CI | PASS: Prisma Client 7.10.1 generado |
+| `npx tsc --noEmit` | PASS |
+| `npm test -- --reporter=dot` | PASS: 99 pruebas en 12 archivos |
+| `npm run lint` | PASS tras corregir errores detectados |
+| `npm run build` con placeholders CI | PASS: Next.js 16.4.2 genera `/historial`, `/jugar` y APIs |
+| `npm --prefix server run build` | PASS |
+| `npm --prefix server test -- --reporter=dot` | PASS: 60 pruebas en 6 archivos |
 
-También se corrigió la descripción del seed en [`README.md`](../README.md): el
-código actual cuenta todas las filas y no borra/reemplaza filas de
-`seed-player-*`; los lotes son secuenciales y no están protegidos frente a dos
-ejecuciones simultáneas.
-
-## Línea base y comandos
-
-### Antes de corregir Prisma
-
-- `npx tsc --noEmit`: pasó.
-- `npm test -- --reporter=dot`: 62 pruebas/5 archivos pasaron.
-- `npm run lint`: pasó.
-- `npm run build`: falló al recopilar `/api/telemetry`: `PrismaClient was
-  instantiated without any options. A driver adapter is required`.
-- `npm --prefix server run build`: pasó.
-- Primera ejecución de `npm --prefix server test -- --reporter=dot`: 39
-  pruebas pasaron y falló temporalmente la conexión XHR de Socket.IO; la prueba
-  de integración aislada pasó al repetirse.
-
-### Después de corregir Prisma
-
-- `npm test -- --reporter=dot`: 63 pruebas/6 archivos pasaron.
-- `npm run build`: pasó; `/api/telemetry` aparece como dinámica.
-- `npx tsc --noEmit`: pasó.
-- `npm run lint`: pasó.
-- `npm --prefix server run build`: pasó.
-- `npm --prefix server test -- --reporter=dot`: 40 pruebas/3 archivos pasaron.
-- `npx prisma migrate status`: una migración encontrada; esquema actualizado.
-- `npx tsx check-count.mjs`: exactamente 10.000 filas en `MatchHistory`, 0
-  faltantes.
-
-La ejecución alojada de GitHub Actions, el flujo OAuth, dispositivos móviles y
-el despliegue no se verificaron en este equipo.
+Una primera compilación falló porque las rutas declaraban `runtime = "nodejs"`
+con `cacheComponents: true`; la guía incluida con Next.js 16 indica eliminar
+esa exportación. El build final pasó después de quitarla y colocar el acceso
+dependiente de sesión dentro de límites `<Suspense>`.
 
 ## Pruebas manuales pendientes
 
-1. Ejecutar `/solo` y `/jugar` con teclado: movimiento WASD/flechas, colisiones
-   y ataque con espacio; verificar controles táctiles y cancelar movimiento al
-   soltar o perder foco.
-2. Abrir dos clientes en la misma sala y comprobar sincronización, combate,
-   victoria/derrota, salida y reconexión según la política deseada.
-3. Cuando se implemente OAuth, verificar callbacks de desarrollo/producción,
-   expiración/cierre de sesión, rutas protegidas y que un cliente no pueda
-   suplantar la identidad de otro.
-4. En un host real, validar HTTPS/WSS, origen CORS autorizado, conectividad a
-   PostgreSQL, persistencia del proceso Socket.IO y acceso a variables de
-   entorno sin imprimirlas.
-5. Confirmar con la fuente oficial qué representa la cantidad de 10.000 y
-   verificar si `MatchHistory` es la entidad obligatoria.
+1. Configurar GitHub OAuth local con callback
+   `http://localhost:3000/api/auth/callback/github`; verificar login, callback,
+   logout y acceso denegado a `/jugar` sin sesión.
+2. Probar `/solo` sin cuenta y `/jugar` con dos usuarios en salas, teclado,
+   combate, victoria/derrota, botón de reinicio del host y rechazo de reinicio
+   por otros jugadores.
+3. Probar pérdida temporal de red/reconexión y expiración después del período
+   configurado; comprobar duplicados de sesión en dos pestañas.
+4. Probar controles táctiles en un dispositivo físico, incluyendo toque
+   sostenido, `pointercancel`, cambio de aplicación y orientación.
+5. Tras aprobación explícita, revisar y aplicar la migración en el entorno
+   elegido. Verificar guardado de partidas reales y paginación conectada a la
+   base sin exponer inventarios ni partidas de otros usuarios.
+6. Confirmar con la fuente oficial qué representan las 10.000 filas y volver a
+   ejecutar un conteo de solo lectura si hace falta evidencia actual.
+7. Elegir host, configurar variables, CORS exacto, HTTPS/WSS, WebSocket
+   persistente, health check, OAuth callback de producción y conectividad DB.
+8. Consultar la ejecución alojada de CI en GitHub; no se afirma que haya
+   ocurrido en esta auditoría.

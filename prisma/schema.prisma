@@ -8,7 +8,8 @@ datasource db {
 
 model MatchHistory {
   id              String   @id @default(cuid())
-  playerId        String   // ID del jugador (puede ser socket.id o userId de OAuth)
+  matchId         String?
+  playerId        String   // Identificador estable validado de la cuenta
   playerName      String
   levelReached    Int
   enemiesDefeated Int
@@ -20,4 +21,5 @@ model MatchHistory {
   @@index([playerId])
   @@index([createdAt])
   @@index([levelReached])
+  @@unique([matchId, playerId])
 }

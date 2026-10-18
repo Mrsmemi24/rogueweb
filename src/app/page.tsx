@@ -1,7 +1,10 @@
 import Link from "next/link";
+import { auth } from "@/auth";
+import AuthButtons from "@/components/AuthButtons";
 import OnlineGame from "@/components/OnlineGame";
+import { Suspense } from "react";
 
-export default function JugarPage() {
+export default function HomePage() {
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
       <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6">
@@ -44,8 +47,37 @@ export default function JugarPage() {
           {/* Si tu grid es de 3 columnas (sm:grid-cols-3), aquí irían los otros dos <article> */}
         </div>
 
-        <OnlineGame />
+        <Suspense
+          fallback={
+            <p role="status" className="mt-8 text-slate-400">
+              Verificando tu sesión…
+            </p>
+          }
+        >
+          <HomeGameContent />
+        </Suspense>
       </div>
     </main>
+  );
+}
+
+async function HomeGameContent() {
+  const session = await auth();
+
+  return (
+    <>
+      <div className="mt-8">
+        <AuthButtons />
+      </div>
+
+      {session?.user?.id ? (
+        <OnlineGame />
+      ) : (
+        <p className="mt-8 rounded-xl border border-slate-800 bg-slate-900 p-5 text-slate-300">
+          Inicia sesión en la página multijugador para jugar en línea, o elige
+          el modo individual sin cuenta.
+        </p>
+      )}
+    </>
   );
 }

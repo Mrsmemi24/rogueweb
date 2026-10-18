@@ -1,44 +1,53 @@
-import { NextRequest, NextResponse } from "next/server";
-import { PrismaPg } from "@prisma/adapter-pg";
-import { PrismaClient } from "@prisma/client";
+import { auth } from "@/auth";
+import { getPrismaClient } from "@/lib/prisma";
+import { NextRequest } from "next/server";
 
-const connectionString = process.env.DATABASE_URL;
+function parsePositiveInteger(value: string | null, fallback: number, max: number) {
+  if (value === null) return fallback;
+  if (!/^[1-9]\d*$/.test(value)) return null;
 
-if (!connectionString) {
-  throw new Error("DATABASE_URL no está configurada");
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed <= max ? parsed : null;
 }
 
-const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString }),
-});
-
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const page = Math.max(1, Number(searchParams.get("page") || 1));
-  const limit = Math.min(50, Number(searchParams.get("limit") || 20)); // máximo 50
-  const skip = (page - 1) * limit;
+  const session = await auth();
+  const playerId = session?.user?.id;
 
+  if (!playerId) {
+    return Response.json({ error: "Authentication required" }, { status: 401 });
+  }
+
+  const { searchParams } = new URL(request.url);
+  const page = parsePositiveInteger(searchParams.get("page"), 1, 100_000);
+  const limit = parsePositiveInteger(searchParams.get("limit"), 20, 50);
+
+  if (page === null || limit === null) {
+    return Response.json({ error: "Invalid pagination parameters" }, { status: 400 });
+  }
+
+  const where = { playerId };
+  const prisma = getPrismaClient();
   const [data, total] = await Promise.all([
     prisma.matchHistory.findMany({
-      skip,
+      where,
+      skip: (page - 1) * limit,
       take: limit,
       orderBy: { createdAt: "desc" },
       select: {
         id: true,
-        playerId: true,
         playerName: true,
         levelReached: true,
         enemiesDefeated: true,
         durationSeconds: true,
-        inventory: true,
         result: true,
         createdAt: true,
       },
     }),
-    prisma.matchHistory.count(),
+    prisma.matchHistory.count({ where }),
   ]);
 
-  return NextResponse.json({
+  return Response.json({
     data,
     pagination: {
       page,

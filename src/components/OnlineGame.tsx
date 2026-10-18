@@ -62,6 +62,8 @@ type GameEnemy = {
 
 type GameState = {
   roomId: string;
+  matchId?: string;
+  hostPlayerId?: string;
   seed: number;
   map: string[];
   exit: {
@@ -75,6 +77,7 @@ type GameState = {
 
 type ServerToClientEvents = {
   "lobby:state": (state: LobbyState) => void;
+  "lobby:joined": (payload: { playerId: string }) => void;
   "game:state": (state: GameState) => void;
   "app:error": (payload: { message: string }) => void;
 };
@@ -93,6 +96,8 @@ type ClientToServerEvents = {
   "game:attack": (payload: {
     direction: Direction;
   }) => void;
+  "game:restart": (payload: Record<string, never>) => void;
+  "lobby:leave": (payload: Record<string, never>) => void;
 };
 
 const SOCKET_URL =
@@ -105,6 +110,10 @@ export default function OnlineGame() {
   const attackDirectionRef = useRef<Direction>("down");
   const movementIntervalRef = useRef<number | null>(null);
   const moveRef = useRef<(direction: Direction) => void>(() => {});
+  const joinedRoomRef = useRef<{
+    roomId: string;
+    playerName: string;
+  } | null>(null);
 
   const [connected, setConnected] = useState(false);
   const [currentPlayerId, setCurrentPlayerId] = useState<
@@ -203,20 +212,40 @@ export default function OnlineGame() {
 
   useEffect(() => {
     const socket: Socket<ServerToClientEvents, ClientToServerEvents> =
-      io(SOCKET_URL);
+      io(SOCKET_URL, {
+        autoConnect: false,
+        auth: (callback) => {
+          void fetch("/api/socket-token", {
+            cache: "no-store",
+            credentials: "same-origin",
+          })
+            .then(async (response) => {
+              if (!response.ok) {
+                throw new Error("Socket authentication is unavailable");
+              }
+
+              return (await response.json()) as { token: string };
+            })
+            .then(({ token }) => callback({ token }))
+            .catch(() => {
+              callback({ token: "" });
+            });
+        },
+      });
 
     socketRef.current = socket;
 
     const onConnect = () => {
       setConnected(true);
-      setCurrentPlayerId(socket.id);
       setError("");
+      if (joinedRoomRef.current) {
+        socket.emit("lobby:join", joinedRoomRef.current);
+      }
     };
 
     const onDisconnect = () => {
       stopMoving();
       setConnected(false);
-      setCurrentPlayerId(undefined);
       setLobby(null);
       setGameState(null);
     };
@@ -228,6 +257,10 @@ export default function OnlineGame() {
 
     const onLobbyState = (state: LobbyState) => {
       setLobby(state);
+    };
+
+    const onLobbyJoined = (payload: { playerId: string }) => {
+      setCurrentPlayerId(payload.playerId);
     };
 
     const onGameState = (state: GameState) => {
@@ -248,12 +281,14 @@ export default function OnlineGame() {
     socket.on("disconnect", onDisconnect);
     socket.on("connect_error", onConnectionError);
     socket.on("lobby:state", onLobbyState);
+    socket.on("lobby:joined", onLobbyJoined);
     socket.on("game:state", onGameState);
     socket.on("app:error", onAppError);
     window.addEventListener("pointerup", stopOnFocusLoss);
     window.addEventListener("pointercancel", stopOnFocusLoss);
     window.addEventListener("blur", stopOnFocusLoss);
     document.addEventListener("visibilitychange", stopWhenHidden);
+    socket.connect();
 
     return () => {
       stopMoving();
@@ -261,6 +296,7 @@ export default function OnlineGame() {
       socket.off("disconnect", onDisconnect);
       socket.off("connect_error", onConnectionError);
       socket.off("lobby:state", onLobbyState);
+      socket.off("lobby:joined", onLobbyJoined);
       socket.off("game:state", onGameState);
       socket.off("app:error", onAppError);
       window.removeEventListener("pointerup", stopOnFocusLoss);
@@ -283,6 +319,7 @@ export default function OnlineGame() {
 
     setError("");
     setGameState(null);
+    joinedRoomRef.current = { roomId, playerName };
 
     socket.emit("lobby:join", {
       roomId,
@@ -324,6 +361,26 @@ export default function OnlineGame() {
     socket.emit("lobby:ready", {
       ready: !currentPlayer.ready,
     });
+  };
+
+  const leaveRoom = () => {
+    const socket = socketRef.current;
+    if (!socket?.connected) return;
+
+    socket.emit("lobby:leave", {});
+    joinedRoomRef.current = null;
+    setLobby(null);
+    setGameState(null);
+    setCurrentPlayerId(undefined);
+  };
+
+  const restartGame = () => {
+    const socket = socketRef.current;
+    if (!socket?.connected || !gameState || gameState.status === "active") {
+      return;
+    }
+
+    socket.emit("game:restart", {});
   };
 
   return (
@@ -383,6 +440,15 @@ export default function OnlineGame() {
           >
             {currentPlayer?.ready ? "Cancelar preparación" : "Estoy listo"}
           </button>
+
+          <button
+            type="button"
+            disabled={!connected || !currentPlayer}
+            onClick={leaveRoom}
+            className="rounded-lg border border-slate-600 px-4 py-2 font-semibold disabled:opacity-50"
+          >
+            Salir de la sala
+          </button>
         </div>
 
         {error && (
@@ -432,6 +498,17 @@ export default function OnlineGame() {
           onMove={move}
           onAttack={attack}
         />
+
+        {gameState?.status !== "active" &&
+          gameState?.hostPlayerId === currentPlayerId && (
+            <button
+              type="button"
+              onClick={restartGame}
+              className="mt-3 rounded-lg bg-cyan-500 px-4 py-2 font-semibold text-slate-950 hover:bg-cyan-400"
+            >
+              Reiniciar partida
+            </button>
+          )}
 
         {gameState?.status === "victory" && (
           <p

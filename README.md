@@ -2,80 +2,131 @@
 
 ## Local development
 
-Install dependencies once from the repository root:
+Install the locked dependencies for both packages:
 
 ```bash
-npm install
-npm --prefix server install
+npm ci
+npm --prefix server ci
 ```
 
-Start the game web app in one terminal:
+Copy `.env.example` to `.env.local` for the web app. Copy it separately to
+`server/.env` for the Socket.IO backend and uncomment the backend-only
+`HOST`, `PORT` and `RECONNECT_GRACE_MS` settings there. Fill in credentials
+only in local environment files; never commit them. The OAuth provider and
+signing secrets must be configured before multiplayer authentication will
+work.
+
+Start the frontend:
 
 ```bash
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) and select **Jugar** (or open `/jugar` directly). The single-player dungeon runs locally and does not need the lobby server.
-
-To use the multiplayer test lobby, start its Socket.IO server in a second terminal:
+Start the separate Socket.IO backend in another terminal:
 
 ```bash
 npm run dev:socket
 ```
 
-The web app uses `http://127.0.0.1:3001` for the lobby by default. The server exposes `http://127.0.0.1:3001/health` for a health check. Override the web port with `PORT` when running Next.js, the socket server port with `PORT` in `server`, and the socket URL with `NEXT_PUBLIC_SOCKET_URL` in the web app environment.
+Open `http://localhost:3000`. `/solo` remains available without an account.
+`/jugar` requires GitHub sign-in. The web app requests a short-lived signed
+token from its server before opening the Socket.IO connection. The backend
+defaults to `127.0.0.1:3001`; `/health` is its health check. For a container
+deployment set `HOST=0.0.0.0`, an exact comma-separated `CLIENT_ORIGIN`, and a
+public `NEXT_PUBLIC_SOCKET_URL` using `wss://`.
 
-The game board is generated in Phaser from canvas shapes; no external game assets or font downloads are required.
+### GitHub OAuth setup
 
-## Match-history database
+Create a GitHub OAuth App in the provider dashboard. Configure the callback
+URL to match the environment:
 
-Set `DATABASE_URL` in the root `.env` file to your PostgreSQL connection string:
+- Local: `http://localhost:3000/api/auth/callback/github`
+- Production: `https://<your-web-host>/api/auth/callback/github`
 
-```env
-DATABASE_URL="postgresql://<USER>:<PASSWORD>@localhost:5432/rogueweb?schema=public"
-```
+Set `AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` and a unique `AUTH_SECRET` in the
+web host environment. Configure the same `SOCKET_AUTH_SECRET` (at least 32
+bytes) in the web app and Socket.IO backend. Do not place secrets in
+`NEXT_PUBLIC_*` variables or paste them into source control.
 
-With PostgreSQL running, create the schema and load the 10,000 sample match records:
+## PostgreSQL and Prisma
 
-```bash
-npx prisma migrate dev --name init
-npx prisma db seed
-```
-
-The seed counts all rows in `MatchHistory` and inserts only enough sample rows
-to bring that table to 10,000, in batches of 500. It does not delete or replace
-existing records. A sequential rerun after the table reaches 10,000 rows inserts
-nothing. Do not run multiple seed processes concurrently: the seed has no
-unique marker for sample rows and its count-then-insert steps are not protected
-against concurrent writes.
-
-## Project checks
-
-Run the frontend checks from the repository root:
+Set `DATABASE_URL` only in the local/server environment, then validate and
+generate the Prisma client:
 
 ```bash
+npx prisma validate
+npx prisma generate
+```
+
+For a disposable local database, apply checked-in migrations with:
+
+```bash
+npx prisma migrate deploy
+```
+
+The additive `matchId`/idempotency migration has **not** been applied to
+Supabase or any production database. Review the SQL, take an approved backup,
+and get explicit approval before applying it to a live database. The deployment
+command is `npx prisma migrate deploy`; it changes schema and must be run only
+as an approved deployment step.
+
+The seed counts all `MatchHistory` rows and inserts only the deficit to 10,000
+in batches of at most 500. It does not delete or replace rows. A sequential
+rerun at 10,000 is a no-op, but concurrent seed processes could create logical
+duplicates. The user previously confirmed a read-only count of 10,000 rows;
+the official rubric's definition of those rows is still unresolved. Do not
+re-run the seed against the existing database.
+
+At authoritative multiplayer terminal state, the backend signs a short-lived
+match snapshot and calls `MATCH_HISTORY_URL`. The web server validates the
+signature and writes one row per authenticated participant. The nullable
+`matchId` and unique `(matchId, playerId)` constraint make retries idempotent
+without replacing legacy sample records. `/historial` and `/api/telemetry`
+return only the signed-in user's paginated public match details, not inventory
+or other users' records.
+
+## Checks
+
+From the repository root:
+
+```bash
+npx prisma validate
+npx prisma generate
 npx tsc --noEmit
 npm test -- --reporter=dot
 npm run lint
 npm run build
 ```
 
-Run the backend checks from `server/`:
+For the separate backend:
 
 ```bash
-npm run build
-npm test -- --reporter=dot
+npm --prefix server run build
+npm --prefix server test -- --reporter=dot
 ```
 
-GitHub Actions runs these checks on pushes and pull requests. The detailed
-requirements audit and oral-defense architecture summary are in
-[`docs/requirements-audit.md`](docs/requirements-audit.md) and
-[`docs/oral-defense.md`](docs/oral-defense.md).
+GitHub Actions runs locked installs, Prisma validation/generation, frontend
+lint/type-check/tests/build, and backend build/tests on pushes and pull
+requests. CI uses placeholder credentials and a dummy database URL; it does
+not connect to the project's PostgreSQL database.
 
-## Multiplayer lifecycle
+## Multiplayer lifecycle and deployment
 
-The first player to reach the exit wins for the room. A room is defeated when
-all its players are defeated. Terminal rooms reject actions and new joins;
-disconnecting all players removes the in-memory room so it can be generated
-again. The current game state is not persisted between server restarts or when
-the final player disconnects.
+The first player to reach the exit wins for the room; the room loses when all
+players are defeated. Only the room host can restart a terminal game. A
+disconnected player retains their room state for `RECONNECT_GRACE_MS` (default
+30 seconds); reconnecting with the same authenticated account restores it.
+Duplicate live sessions replace the earlier socket. Rate limits and reconnect
+state are in-memory per backend process, so they are not shared by multiple
+replicas; use a shared adapter/store or single backend instance when scaling.
+
+Production requires a host with persistent WebSocket support, HTTPS/WSS,
+PostgreSQL network access, exact CORS origins, `HOST=0.0.0.0`, an HTTPS
+`MATCH_HISTORY_URL`, OAuth callback registration, and the variables listed in
+`.env.example`. Requests without an `Origin` are allowed only for local
+development; production accepts only configured origins. No hosting provider
+has been selected or configured in this repository.
+
+See [`docs/requirements-audit.md`](docs/requirements-audit.md) for current
+evidence and [`docs/oral-defense.md`](docs/oral-defense.md) for a concise
+architecture explanation in Spanish.

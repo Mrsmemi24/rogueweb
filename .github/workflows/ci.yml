@@ -10,6 +10,12 @@ permissions:
 jobs:
   frontend:
     runs-on: ubuntu-latest
+    env:
+      AUTH_SECRET: ci-only-not-a-real-secret
+      AUTH_GITHUB_ID: ci-only
+      AUTH_GITHUB_SECRET: ci-only
+      SOCKET_AUTH_SECRET: ci-only-socket-secret-at-least-32-bytes
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci?schema=public
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -17,6 +23,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - run: npx prisma validate
+      - run: npx prisma generate
       - run: npm run build
       - run: npx tsc --noEmit
       - run: npm test -- --reporter=dot
@@ -24,6 +32,8 @@ jobs:
 
   backend:
     runs-on: ubuntu-latest
+    env:
+      SOCKET_AUTH_SECRET: ci-only-socket-secret-at-least-32-bytes
     defaults:
       run:
         working-directory: server

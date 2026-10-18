@@ -1,55 +1,61 @@
-# RogueWeb architecture: oral-defense notes
+# Explicación breve para la defensa oral
 
-## Two game modes
+## Arquitectura
 
-- `/solo` owns its maze, player statistics, enemies, and combat inside the
-  browser. Phaser draws the state, while the local combat helpers calculate
-  movement and damage.
-- `/jugar` sends player intentions over one Socket.IO connection. The Node
-  server owns each room's map, positions, enemies, health, XP, level, and game
-  result. Phaser only renders the public state received through `game:state`.
+RogueWeb tiene dos modos. `/solo` funciona en el navegador y se puede jugar sin
+cuenta. `/jugar` utiliza un servidor Node.js separado con Socket.IO. Phaser
+dibuja el tablero, pero no decide el estado real de una partida en línea.
 
-## What happens on a multiplayer move or attack?
+## Identidad y seguridad
 
-1. The client sends only a direction; it does not send coordinates, damage, or
-   a requested result.
-2. The server identifies the player from the connected socket and room
-   membership, validates the action and applies collision/cooldown rules.
-3. On a valid action, the server advances living enemies, calculates damage,
-   clamps health, applies defeat or progression, and checks for a terminal
-   result.
-4. The server explicitly serializes the public room state and broadcasts it to
-   all members. Server-only combat values are omitted.
-5. Each browser renders that same state. This prevents a modified browser from
-   deciding its own health, XP, movement, or enemy defeat.
+Auth.js permite iniciar sesión con GitHub y conserva una sesión JWT. El servidor
+web crea un token Socket.IO firmado que dura 60 segundos. El backend comprueba
+firma, emisor, audiencia y vencimiento antes de aceptar la conexión. La
+identidad estable proviene de la cuenta validada, no de un `playerId` enviado
+por el navegador.
 
-## Why Phaser does not own multiplayer state
+El cliente sólo envía intenciones, como una dirección para moverse o atacar.
+El backend valida el esquema y la membresía de la sala, calcula colisiones,
+turnos de enemigos, daño, vida, experiencia, nivel y victoria/derrota. También
+limita la cantidad de eventos para evitar spam. Esos límites viven en memoria
+de cada proceso, así que varias réplicas necesitarían compartirlos.
 
-Phaser is a renderer and input source for `/jugar`. If it moved a player or
-changed health locally, clients could disagree or bypass collision rules.
-Sending intentions and rendering server responses keeps the room synchronized.
+## Guardado de partidas
 
-## Storage and identity
+Cuando el servidor detecta que la partida terminó, crea un identificador único
+y genera los resultados desde su propio estado. Envía el resumen firmado al
+servidor web, que guarda una fila por participante en PostgreSQL mediante
+Prisma. La clave única `(matchId, playerId)` evita duplicar filas al reintentar.
+La migración que agrega esa clave todavía no se aplicó a Supabase.
 
-Prisma 7 connects to PostgreSQL through the PostgreSQL driver adapter. The
-`MatchHistory` model and initial migration exist, and the sample seed inserts
-records in batches until the table reaches 10,000 rows. The telemetry API reads
-that table, but the game server does not yet save real completed matches.
+La pantalla `/historial` consulta sólo las partidas de la cuenta autenticada y
+no muestra inventario ni registros de otros usuarios. Prisma 7 usa el adaptador
+PostgreSQL `PrismaPg`; no se ejecutó una escritura ni se repitió el seed de
+10.000 filas.
 
-The multiplayer room itself remains in memory and disappears when its last
-socket leaves. OAuth, sessions, and protected routes are not implemented:
-players currently use the server-generated `socket.id` for the active
-connection, while the display name comes from the client. A validated identity
-provider and session policy must be agreed before connecting accounts to game
-history.
+## Reconexión y reinicio
 
-## Multiplayer completion
+La identidad del usuario no depende del ID temporal del socket. Si la conexión
+se corta, el servidor conserva al jugador durante un período de gracia y
+permite recuperar la misma sala. Si se conecta otra sesión de la misma cuenta,
+la conexión anterior se sustituye. Al expirar el período y salir todos, se
+elimina la sala en memoria.
 
-The first player to reach the exit wins for the room, as confirmed by the
-project owner. If every player is defeated, the room is defeated. A terminal
-room rejects further actions and new joins. Disconnecting every player removes
-it, allowing a fresh room to be generated; an in-game restart control is not
-implemented. Reconnecting creates a new socket identity and does not restore
-the previous room state. The socket server currently binds to `127.0.0.1`;
-production hosting must configure a reachable interface, allowed origin,
-HTTPS/WSS, and persistent WebSocket support.
+El host puede reiniciar una partida terminada. El mapa y los metadatos se
+regeneran y los jugadores vuelven a estadísticas iniciales; no se heredan HP,
+XP ni inventario.
+
+## Pasos externos pendientes
+
+Para que funcione OAuth real hay que crear una GitHub OAuth App y configurar
+`AUTH_GITHUB_ID`, `AUTH_GITHUB_SECRET` y `AUTH_SECRET` localmente y en el host.
+El callback local es
+`http://localhost:3000/api/auth/callback/github`; producción requiere el mismo
+camino bajo el dominio HTTPS elegido. `SOCKET_AUTH_SECRET` debe ser un secreto
+independiente compartido por web y backend.
+
+También falta elegir un host compatible con WebSockets persistentes y
+configurar PostgreSQL, HTTPS/WSS, `CLIENT_ORIGIN`, `NEXT_PUBLIC_SOCKET_URL` y
+`MATCH_HISTORY_URL`. Antes de aplicar la migración a Supabase se debe revisar
+el SQL y obtener aprobación. La rúbrica oficial todavía debe confirmar qué
+representan las 10.000 filas.

@@ -2,7 +2,9 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createServer } from "node:net";
 import { fileURLToPath } from "node:url";
 import { io, type Socket } from "socket.io-client";
+import { SignJWT } from "jose";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createSocketAccessToken } from "./auth.js";
 
 type Direction = "up" | "down" | "left" | "right";
 
@@ -30,11 +32,16 @@ type PublicPlayer = Position & {
 
 type GameState = {
   roomId: string;
+  matchId?: string;
+  hostPlayerId?: string;
   map: string[];
+  exit: Position;
   players: PublicPlayer[];
   enemies: PublicEnemy[];
   status: "active" | "victory" | "defeat";
 };
+
+const SOCKET_TEST_SECRET = "test-only-socket-secret-at-least-32-bytes";
 
 const DIRECTIONS: Array<{
   direction: Direction;
@@ -170,6 +177,20 @@ function nextGameState(
   });
 }
 
+function nextJoinedPlayerId(socket: Socket) {
+  return new Promise<string>((resolve) => {
+    socket.once("lobby:joined", ({ playerId }: { playerId: string }) => {
+      resolve(playerId);
+    });
+  });
+}
+
+function nextAppError(socket: Socket) {
+  return new Promise<{ message: string }>((resolve) => {
+    socket.once("app:error", resolve);
+  });
+}
+
 async function allocatePort() {
   const listener = createServer();
 
@@ -195,7 +216,29 @@ describe("Socket.IO authoritative combat", () => {
   let port: number;
   let serverProcess: ChildProcess | undefined;
   let stderr = "";
-  let clients: Socket[] = [];
+  const clients: Socket[] = [];
+
+  function openClient(token?: string) {
+    const socket = io(`http://127.0.0.1:${port}`, {
+      ...(token ? { auth: { token } } : {}),
+      reconnection: false,
+      timeout: 3000,
+    });
+    clients.push(socket);
+    return socket;
+  }
+
+  async function connectClient(userId: string) {
+    const token = await createSocketAccessToken(userId, SOCKET_TEST_SECRET);
+    const socket = openClient(token);
+
+    await new Promise<void>((resolve, reject) => {
+      socket.once("connect", resolve);
+      socket.once("connect_error", reject);
+    });
+
+    return socket;
+  }
 
   beforeAll(async () => {
     port = await allocatePort();
@@ -204,7 +247,13 @@ describe("Socket.IO authoritative combat", () => {
       ["--import", "tsx", "src/index.ts"],
       {
         cwd: fileURLToPath(new URL("..", import.meta.url)),
-        env: { ...process.env, PORT: String(port) },
+        env: {
+          ...process.env,
+          PORT: String(port),
+          HOST: "127.0.0.1",
+          RECONNECT_GRACE_MS: "1000",
+          SOCKET_AUTH_SECRET: SOCKET_TEST_SECRET,
+        },
         stdio: ["ignore", "ignore", "pipe"],
       }
     );
@@ -228,15 +277,16 @@ describe("Socket.IO authoritative combat", () => {
       }
     }
 
-    const first = io(`http://127.0.0.1:${port}`, {
-      reconnection: false,
-      timeout: 3000,
-    });
-    const second = io(`http://127.0.0.1:${port}`, {
-      reconnection: false,
-      timeout: 3000,
-    });
-    clients = [first, second];
+    const firstToken = await createSocketAccessToken(
+      "github:test-player-one",
+      SOCKET_TEST_SECRET
+    );
+    const secondToken = await createSocketAccessToken(
+      "github:test-player-two",
+      SOCKET_TEST_SECRET
+    );
+    openClient(firstToken);
+    openClient(secondToken);
 
     await Promise.all(
       clients.map(
@@ -272,6 +322,7 @@ describe("Socket.IO authoritative combat", () => {
     async () => {
       const [first, second] = clients;
       const roomId = `combat-${Date.now()}`;
+      const firstPlayerIdPromise = nextJoinedPlayerId(first);
       const firstJoin = nextGameState(
         first,
         roomId,
@@ -279,13 +330,29 @@ describe("Socket.IO authoritative combat", () => {
       );
       first.emit("lobby:join", { roomId, playerName: "Combatiente A" });
       await firstJoin;
+      const firstPlayerId = await firstPlayerIdPromise;
 
+      const secondPlayerIdPromise = nextJoinedPlayerId(second);
       const bothJoined = [
         nextGameState(first, roomId, (state) => state.players.length === 2),
         nextGameState(second, roomId, (state) => state.players.length === 2),
       ];
       second.emit("lobby:join", { roomId, playerName: "Combatiente B" });
       let [firstState, secondState] = await Promise.all(bothJoined);
+      const secondPlayerId = await secondPlayerIdPromise;
+
+      const spoofedIdentityError = new Promise<{ message: string }>((resolve) => {
+        second.once("app:error", resolve);
+      });
+      second.emit("game:move", {
+        direction: "right",
+        playerId: firstPlayerId,
+        userId: "github:test-player-one",
+      });
+      await expect(spoofedIdentityError).resolves.toMatchObject({
+        message: expect.any(String),
+      });
+      expect(firstState.players).toEqual(secondState.players);
 
       expect(firstState.map).toEqual(secondState.map);
       expect(firstState.enemies).toEqual(secondState.enemies);
@@ -306,19 +373,12 @@ describe("Socket.IO authoritative combat", () => {
         firstState.players.map(({ id, hp }) => [id, hp])
       );
 
-      const firstId = first.id;
-      const secondId = second.id;
-
-      if (!firstId || !secondId) {
-        throw new Error("Connected test clients must have socket IDs.");
-      }
-
-      let attackerId = firstId;
+      let attackerId = firstPlayerId;
       let attacker = first;
       let route = findAttackRoute(firstState, attackerId);
 
       if (!route) {
-        attackerId = secondId;
+        attackerId = secondPlayerId;
         attacker = second;
         route = findAttackRoute(firstState, attackerId);
       }
@@ -493,4 +553,204 @@ describe("Socket.IO authoritative combat", () => {
     },
     30000
   );
+
+  it("rejects the ninth lobby join without emitting state for its target room", async () => {
+    const socket = await connectClient("github:rate-limit-test");
+    const sourceRoomId = `rls-${Date.now()}`;
+    const targetRoomId = `rlt-${Date.now()}`;
+
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      const joined = nextJoinedPlayerId(socket);
+      socket.emit("lobby:join", {
+        roomId: sourceRoomId,
+        playerName: "Limit test",
+      });
+      await joined;
+    }
+
+    let targetRoomWasBroadcast = false;
+    socket.on("game:state", (state: GameState) => {
+      if (state.roomId === targetRoomId) targetRoomWasBroadcast = true;
+    });
+    const limited = new Promise<{ message: string }>((resolve) => {
+      socket.once("app:error", resolve);
+    });
+    socket.emit("lobby:join", {
+      roomId: targetRoomId,
+      playerName: "Limit test",
+    });
+
+    await expect(limited).resolves.toMatchObject({
+      message: expect.any(String),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(targetRoomWasBroadcast).toBe(false);
+  });
+
+  it("rejects Socket.IO handshakes without a valid access token", async () => {
+    const expiredToken = await new SignJWT({})
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuer("rogueweb-web")
+      .setAudience("rogueweb-socket")
+      .setSubject("github:expired")
+      .setIssuedAt(1_700_000_000)
+      .setExpirationTime(1_700_000_001)
+      .sign(new TextEncoder().encode(SOCKET_TEST_SECRET));
+    const wrongAudienceToken = await new SignJWT({})
+      .setProtectedHeader({ alg: "HS256" })
+      .setIssuer("rogueweb-web")
+      .setAudience("rogueweb-other")
+      .setSubject("github:wrong-audience")
+      .setIssuedAt()
+      .setExpirationTime("60s")
+      .sign(new TextEncoder().encode(SOCKET_TEST_SECRET));
+
+    for (const token of [undefined, "invalid-token", expiredToken, wrongAudienceToken]) {
+      const socket = openClient(token);
+      const message = await new Promise<string>((resolve) => {
+        socket.once("connect_error", (error: Error) => resolve(error.message));
+      });
+      expect(message).toMatch(/unauthorized/i);
+      socket.disconnect();
+    }
+  });
+
+  it("restores a disconnected player's room within grace and cleans it after expiry", async () => {
+    const userId = `github:resume-${Date.now()}`;
+    const roomId = `rec-${Date.now()}`;
+    const firstSocket = await connectClient(userId);
+    const firstPlayerIdPromise = nextJoinedPlayerId(firstSocket);
+    const firstStatePromise = nextGameState(
+      firstSocket,
+      roomId,
+      (state) => state.players.length === 1
+    );
+    firstSocket.emit("lobby:join", { roomId, playerName: "Reconexión" });
+    const [firstPlayerId, firstState] = await Promise.all([
+      firstPlayerIdPromise,
+      firstStatePromise,
+    ]);
+
+    const activeReplacement = await connectClient(userId);
+    const activeReplacementIdPromise = nextJoinedPlayerId(activeReplacement);
+    const activeReplacementStatePromise = nextGameState(
+      activeReplacement,
+      roomId,
+      (state) => state.players.length === 1
+    );
+    activeReplacement.emit("lobby:join", {
+      roomId,
+      playerName: "Reconexión",
+    });
+    const [activeReplacementId, activeReplacementState] = await Promise.all([
+      activeReplacementIdPromise,
+      activeReplacementStatePromise,
+    ]);
+    expect(activeReplacementId).toBe(firstPlayerId);
+    expect(activeReplacementState.matchId).toBe(firstState.matchId);
+    await new Promise<void>((resolve) => {
+      if (!firstSocket.connected) {
+        resolve();
+        return;
+      }
+      firstSocket.once("disconnect", () => resolve());
+    });
+
+    activeReplacement.disconnect();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const resumedSocket = await connectClient(userId);
+    const resumedPlayerIdPromise = nextJoinedPlayerId(resumedSocket);
+    const resumedStatePromise = nextGameState(
+      resumedSocket,
+      roomId,
+      (state) => state.players.length === 1
+    );
+    resumedSocket.emit("lobby:join", { roomId, playerName: "Reconexión" });
+    const [resumedPlayerId, resumedState] = await Promise.all([
+      resumedPlayerIdPromise,
+      resumedStatePromise,
+    ]);
+    expect(resumedPlayerId).toBe(firstPlayerId);
+    expect(resumedState.matchId).toBe(firstState.matchId);
+
+    const observer = await connectClient(`github:observer-${Date.now()}`);
+    const observerJoined = nextGameState(
+      observer,
+      roomId,
+      (state) => state.players.length === 2
+    );
+    observer.emit("lobby:join", { roomId, playerName: "Observador" });
+    await observerJoined;
+
+    let stateAfterGrace: GameState | undefined;
+    resumedSocket.on("game:state", (state: GameState) => {
+      if (state.roomId === roomId) stateAfterGrace = state;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1_300));
+    expect(stateAfterGrace?.players).toHaveLength(2);
+    expect(stateAfterGrace?.players.some(({ id }) => id === firstPlayerId)).toBe(
+      true
+    );
+
+    resumedSocket.disconnect();
+    observer.disconnect();
+    await new Promise((resolve) => setTimeout(resolve, 1_300));
+
+    const replacementSocket = await connectClient(userId);
+    const replacementPlayerIdPromise = nextJoinedPlayerId(replacementSocket);
+    const replacementStatePromise = nextGameState(
+      replacementSocket,
+      roomId,
+      (state) => state.players.length === 1
+    );
+    replacementSocket.emit("lobby:join", { roomId, playerName: "Reconexión" });
+    const [replacementPlayerId, replacementState] = await Promise.all([
+      replacementPlayerIdPromise,
+      replacementStatePromise,
+    ]);
+
+    expect(replacementPlayerId).not.toBe(firstPlayerId);
+    expect(replacementState.matchId).not.toBe(firstState.matchId);
+  }, 10000);
+
+  it("rejects non-members and non-host or active-room restarts", async () => {
+    const host = await connectClient(`github:host-${Date.now()}`);
+    const guest = await connectClient(`github:guest-${Date.now()}`);
+    const roomId = `rst-${Date.now()}`;
+    const hostStatePromise = nextGameState(
+      host,
+      roomId,
+      (state) => state.players.length === 1
+    );
+    host.emit("lobby:join", { roomId, playerName: "Host" });
+    const activeState = await hostStatePromise;
+
+    const nonMemberError = nextAppError(guest);
+    guest.emit("game:move", { direction: "up" });
+    await expect(nonMemberError).resolves.toMatchObject({
+      message: expect.any(String),
+    });
+
+    const guestJoined = nextGameState(
+      guest,
+      roomId,
+      (state) => state.players.length === 2
+    );
+    guest.emit("lobby:join", { roomId, playerName: "Guest" });
+    await guestJoined;
+
+    const guestRestartError = nextAppError(guest);
+    guest.emit("game:restart", {});
+    await expect(guestRestartError).resolves.toMatchObject({
+      message: "Solo quien creó la sala puede reiniciarla.",
+    });
+
+    const hostRestartError = nextAppError(host);
+    host.emit("game:restart", {});
+    await expect(hostRestartError).resolves.toMatchObject({
+      message: "Solo se puede reiniciar una partida terminada.",
+    });
+    expect(activeState.status).toBe("active");
+  });
 });

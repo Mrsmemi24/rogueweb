@@ -8,6 +8,7 @@ import {
   getOrCreateRoom,
   JoinRoomSchema,
   MoveIntentSchema,
+  restartRoomState,
   toPublicGameState,
   toPublicPlayerState,
   tryAttackPlayer,
@@ -66,6 +67,51 @@ describe("authoritative multiplayer room state", () => {
       level: 1,
       xp: 0,
       enemiesDefeated: 0,
+      status: "alive",
+    });
+  });
+
+  it("restarts a terminal room with fresh player and match state", () => {
+    const room = createRoomState(12);
+    const userId = "github:player-one";
+    const player = createPlayer(
+      "public-player-one",
+      "One",
+      room.dungeon.spawns[0],
+      userId
+    );
+    player.ready = true;
+    player.hp = 0;
+    player.level = 4;
+    player.xp = 150;
+    player.enemiesDefeated = 3;
+    player.inventory = ["potion"];
+    room.players.set(userId, player);
+    room.hostUserId = userId;
+    room.status = "defeat";
+    room.matchId = "old-match";
+    room.startedAt = 100;
+    room.persistenceState = "saved";
+
+    restartRoomState(room, 99);
+
+    expect(room.status).toBe("active");
+    expect(room.dungeon.seed).toBe(99);
+    expect(room.matchId).toBeUndefined();
+    expect(room.startedAt).toBeUndefined();
+    expect(room.persistenceState).toBeUndefined();
+    expect(room.hostUserId).toBe(userId);
+    expect(room.players.get(userId)).toMatchObject({
+      id: "public-player-one",
+      userId,
+      name: "One",
+      ready: false,
+      hp: 100,
+      maxHp: 100,
+      level: 1,
+      xp: 0,
+      enemiesDefeated: 0,
+      inventory: [],
       status: "alive",
     });
   });

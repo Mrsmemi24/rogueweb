@@ -332,6 +332,7 @@ io.on("connection", (socket) => {
         "invalid-direction": "Dirección de ataque inválida.",
         "player-not-found": "No se encontró al jugador en la sala.",
         defeated: "Un jugador derrotado no puede atacar.",
+        cooldown: "Debes esperar antes de volver a atacar.",
         "no-enemy": "No hay un centinela en esa dirección.",
       };
       socket.emit("app:error", {

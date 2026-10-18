@@ -20,8 +20,12 @@ type PublicEnemy = Position & {
 type PublicPlayer = Position & {
   id: string;
   name: string;
+  hp: number;
+  maxHp: number;
+  level: number;
   xp: number;
   enemiesDefeated: number;
+  status: "alive" | "defeated";
 };
 
 type GameState = {
@@ -52,7 +56,7 @@ function findAttackRoute(
 ): { path: Direction[]; attackDirection: Direction; enemyId: string } | null {
   const player = state.players.find(({ id }) => id === playerId);
 
-  if (!player) return null;
+  if (!player || player.status !== "alive") return null;
 
   const otherPlayers = new Set(
     state.players
@@ -284,6 +288,22 @@ describe("Socket.IO authoritative combat", () => {
 
       expect(firstState.map).toEqual(secondState.map);
       expect(firstState.enemies).toEqual(secondState.enemies);
+      expect(firstState.players).toEqual(secondState.players);
+      expect(firstState.players).toHaveLength(2);
+      expect(firstState.players).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            hp: 100,
+            maxHp: 100,
+            level: 1,
+            xp: 0,
+            status: "alive",
+          }),
+        ])
+      );
+      const initialPlayerHealth = new Map(
+        firstState.players.map(({ id, hp }) => [id, hp])
+      );
 
       const firstId = first.id;
       const secondId = second.id;
@@ -293,24 +313,23 @@ describe("Socket.IO authoritative combat", () => {
       }
 
       let attackerId = firstId;
-      let route = findAttackRoute(firstState, firstId);
       let attacker = first;
+      let route = findAttackRoute(firstState, attackerId);
 
       if (!route) {
-        route = findAttackRoute(firstState, secondId);
-        attacker = second;
         attackerId = secondId;
+        attacker = second;
+        route = findAttackRoute(firstState, attackerId);
       }
 
       expect(route).not.toBeNull();
+      if (!route) throw new Error("No reachable adjacent enemy was generated.");
 
-      if (!route) {
-        throw new Error("No reachable adjacent enemy was generated.");
-      }
+      let damageObserved = false;
+      for (let stepCount = 0; stepCount < 100; stepCount++) {
+        if (!route || route.path.length === 0) break;
 
-      const attackRoute = route;
-
-      for (const direction of attackRoute.path) {
+        const direction = route.path[0];
         const currentPlayer = firstState.players.find(
           ({ id }) => id === attackerId
         );
@@ -345,8 +364,20 @@ describe("Socket.IO authoritative combat", () => {
 
         attacker.emit("game:move", { direction });
         [firstState, secondState] = await Promise.all(updates);
+        expect(firstState.players).toEqual(secondState.players);
+        damageObserved ||= firstState.players.some(
+          ({ id, hp }) =>
+            hp < (initialPlayerHealth.get(id) ?? hp)
+        );
+        route = findAttackRoute(firstState, attackerId);
       }
 
+      expect(route?.path).toHaveLength(0);
+      if (!route || route.path.length !== 0) {
+        throw new Error("The attacker could not reach an adjacent enemy.");
+      }
+
+      const attackRoute = route;
       const target = firstState.enemies.find(
         ({ id }) => id === attackRoute.enemyId
       );
@@ -385,6 +416,10 @@ describe("Socket.IO authoritative combat", () => {
 
       expect(firstHit).toEqual(secondHit);
       expect(firstHit?.hp).toBe(18);
+      expect(firstState.players).toEqual(secondState.players);
+      damageObserved ||= firstState.players.some(
+        ({ id, hp }) => hp < (initialPlayerHealth.get(id) ?? hp)
+      );
 
       const rejectedPayload = new Promise<{ message: string }>((resolve) => {
         attacker.once("app:error", resolve);
@@ -398,6 +433,7 @@ describe("Socket.IO authoritative combat", () => {
         message: expect.any(String),
       });
 
+      await new Promise((resolve) => setTimeout(resolve, 260));
       const defeatedStates = [
         nextGameState(
           first,
@@ -432,8 +468,25 @@ describe("Socket.IO authoritative combat", () => {
       expect(firstDefeat).toEqual(secondDefeat);
       expect(firstDefeat).toMatchObject({ hp: 0, status: "defeated" });
       expect(rewardedPlayer).toMatchObject({
+        maxHp: 100,
+        level: 1,
         xp: 75,
         enemiesDefeated: 1,
+      });
+      expect(firstState.players).toEqual(secondState.players);
+      expect(damageObserved).toBe(true);
+      expect(
+        firstState.players.find(({ id }) => id === attackerId)
+      ).toEqual(
+        secondState.players.find(({ id }) => id === attackerId)
+      );
+      expect(
+        firstState.players.find(({ id }) => id !== attackerId)
+      ).toMatchObject({
+        maxHp: 100,
+        level: 1,
+        xp: 0,
+        enemiesDefeated: 0,
       });
     },
     30000

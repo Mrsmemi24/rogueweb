@@ -8,6 +8,10 @@ const ENEMY_DAMAGE = 5 + ENEMY_LEVEL * 2;
 const ENEMY_DEFENSE = Math.floor((ENEMY_LEVEL - 1) / 3);
 const ENEMY_XP_REWARD = 50 + ENEMY_LEVEL * 25;
 const MAX_ROOM_ENEMIES = 3;
+const ATTACK_COOLDOWN_MS = 250;
+const XP_FOR_FIRST_LEVEL = 100;
+const LEVEL_HP_BONUS = 15;
+const LEVEL_ATTACK_BONUS = 3;
 export const JoinRoomSchema = z
     .object({
     roomId: z
@@ -208,9 +212,10 @@ export function tryMovePlayer(room, playerId, direction) {
     }
     player.x = nextX;
     player.y = nextY;
+    advanceEnemies(room);
     return { ok: true };
 }
-export function tryAttackPlayer(room, playerId, direction) {
+export function tryAttackPlayer(room, playerId, direction, now = Date.now()) {
     if (!isDirection(direction)) {
         return { ok: false, reason: "invalid-direction" };
     }
@@ -220,6 +225,10 @@ export function tryAttackPlayer(room, playerId, direction) {
     }
     if (player.status === "defeated") {
         return { ok: false, reason: "defeated" };
+    }
+    if (player.lastAttackAt !== undefined &&
+        now - player.lastAttackAt < ATTACK_COOLDOWN_MS) {
+        return { ok: false, reason: "cooldown" };
     }
     const offset = DIRECTION_OFFSETS[direction];
     const targetX = player.x + offset.x;
@@ -231,12 +240,89 @@ export function tryAttackPlayer(room, playerId, direction) {
         return { ok: false, reason: "no-enemy" };
     }
     const damage = Math.max(1, player.attack - enemy.defense);
+    player.lastAttackAt = now;
     enemy.hp = Math.max(0, enemy.hp - damage);
     const defeated = enemy.hp === 0;
     enemy.status = defeated ? "defeated" : "alive";
     if (defeated) {
-        player.xp += enemy.xpReward;
+        grantExperience(player, enemy.xpReward);
         player.enemiesDefeated += 1;
     }
+    advanceEnemies(room);
     return { ok: true, damage, defeated };
+}
+function grantExperience(player, amount) {
+    player.xp += Math.max(0, Math.floor(amount));
+    while (player.xp >= player.level * XP_FOR_FIRST_LEVEL) {
+        player.level += 1;
+        player.maxHp += LEVEL_HP_BONUS;
+        player.hp = player.maxHp;
+        player.attack += LEVEL_ATTACK_BONUS;
+        if (player.level % 2 === 0) {
+            player.defense += 1;
+        }
+    }
+}
+function findEnemyStep(room, enemy, target) {
+    const queue = [
+        { x: enemy.x, y: enemy.y },
+    ];
+    const visited = new Set([`${enemy.x},${enemy.y}`]);
+    const directions = ["up", "down", "left", "right"];
+    for (let index = 0; index < queue.length; index++) {
+        const current = queue[index];
+        if (Math.abs(current.x - target.x) +
+            Math.abs(current.y - target.y) ===
+            1) {
+            return current.firstStep;
+        }
+        for (const direction of directions) {
+            const offset = DIRECTION_OFFSETS[direction];
+            const x = current.x + offset.x;
+            const y = current.y + offset.y;
+            const key = `${x},${y}`;
+            if (visited.has(key) ||
+                room.dungeon.map[y]?.[x] !== "." ||
+                Array.from(room.players.values()).some((player) => player.id !== target.id && player.x === x && player.y === y) ||
+                room.enemies.some((other) => other !== enemy &&
+                    other.status === "alive" &&
+                    other.x === x &&
+                    other.y === y)) {
+                continue;
+            }
+            visited.add(key);
+            queue.push({
+                x,
+                y,
+                firstStep: current.firstStep ?? { x, y },
+            });
+        }
+    }
+    return undefined;
+}
+export function advanceEnemies(room) {
+    for (const enemy of room.enemies) {
+        if (enemy.status !== "alive")
+            continue;
+        const target = Array.from(room.players.values())
+            .filter((player) => player.status === "alive")
+            .sort((first, second) => Math.abs(first.x - enemy.x) +
+            Math.abs(first.y - enemy.y) -
+            (Math.abs(second.x - enemy.x) +
+                Math.abs(second.y - enemy.y)))[0];
+        if (!target)
+            continue;
+        const distance = Math.abs(target.x - enemy.x) + Math.abs(target.y - enemy.y);
+        if (distance === 1) {
+            const damage = Math.max(1, enemy.damage - target.defense);
+            target.hp = Math.max(0, target.hp - damage);
+            target.status = target.hp === 0 ? "defeated" : "alive";
+            continue;
+        }
+        const next = findEnemyStep(room, enemy, target);
+        if (next) {
+            enemy.x = next.x;
+            enemy.y = next.y;
+        }
+    }
 }

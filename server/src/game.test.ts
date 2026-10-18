@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  advanceEnemies,
   AttackIntentSchema,
   createPlayer,
   createRoomState,
@@ -237,6 +238,58 @@ describe("authoritative multiplayer room state", () => {
     expect(enemy.hp).toBe(18);
   });
 
+  it("lets adjacent enemies damage living players after valid movement", () => {
+    const room = createRoom();
+    const player = createPlayer("p1", "One", { x: 1, y: 1 });
+    const enemy = addEnemy(room);
+    enemy.x = 3;
+    room.players.set(player.id, player);
+
+    expect(tryMovePlayer(room, player.id, "right")).toEqual({ ok: true });
+    expect(player).toMatchObject({ x: 2, y: 1, hp: 96, status: "alive" });
+
+    expect(toPublicGameState("alpha", room).players[0]).toMatchObject({
+      hp: 96,
+      status: "alive",
+    });
+  });
+
+  it("defeats a player at zero HP and never drops health below zero", () => {
+    const room = createRoom();
+    const player = createPlayer("p1", "One", { x: 1, y: 1 });
+    const enemy = addEnemy(room);
+    enemy.x = 3;
+    player.hp = 4;
+    room.players.set(player.id, player);
+
+    expect(tryMovePlayer(room, player.id, "right")).toEqual({ ok: true });
+    expect(player).toMatchObject({ hp: 0, status: "defeated" });
+
+    expect(tryMovePlayer(room, player.id, "left")).toEqual({
+      ok: false,
+      reason: "defeated",
+    });
+    expect(tryAttackPlayer(room, player.id, "right", 1_000)).toEqual({
+      ok: false,
+      reason: "defeated",
+    });
+    expect(player.hp).toBe(0);
+  });
+
+  it("stops enemies from targeting defeated players", () => {
+    const room = createRoom();
+    const defeatedPlayer = createPlayer("p1", "One", { x: 1, y: 1 });
+    const livingPlayer = createPlayer("p2", "Two", { x: 3, y: 1 });
+    addEnemy(room);
+    room.players.set(defeatedPlayer.id, defeatedPlayer);
+    room.players.set(livingPlayer.id, livingPlayer);
+    updatePlayerHealth(room, defeatedPlayer.id, 0);
+
+    advanceEnemies(room);
+    expect(defeatedPlayer.hp).toBe(0);
+    expect(livingPlayer.hp).toBe(96);
+  });
+
   it("rejects attacks from a distance and invalid directions", () => {
     const room = createRoom();
     const player = createPlayer("p1", "One", { x: 1, y: 1 });
@@ -272,6 +325,67 @@ describe("authoritative multiplayer room state", () => {
     });
   });
 
+  it("enforces the server attack cooldown without applying a second hit", () => {
+    const room = createRoom();
+    const player = createPlayer("p1", "One", { x: 1, y: 1 });
+    const enemy = addEnemy(room);
+    room.players.set(player.id, player);
+
+    expect(tryAttackPlayer(room, player.id, "right", 1_000)).toMatchObject({
+      ok: true,
+      damage: 18,
+    });
+    expect(tryAttackPlayer(room, player.id, "right", 1_249)).toEqual({
+      ok: false,
+      reason: "cooldown",
+    });
+    expect(enemy.hp).toBe(18);
+    expect(tryAttackPlayer(room, player.id, "right", 1_250)).toMatchObject({
+      ok: true,
+      damage: 18,
+    });
+    expect(enemy.hp).toBe(0);
+  });
+
+  it("applies the existing deterministic XP level-up rules", () => {
+    const room = createRoom();
+    room.dungeon.map = ["#######", "#.....#", "#######"];
+    room.dungeon.exit = { x: 5, y: 1 };
+    const player = createPlayer("p1", "One", { x: 1, y: 1 });
+    const firstEnemy = addEnemy(room, "sentinel-first");
+    const secondEnemy = addEnemy(room, "sentinel-second");
+    secondEnemy.x = 4;
+    firstEnemy.hp = 18;
+    secondEnemy.hp = 18;
+    room.players.set(player.id, player);
+
+    expect(tryAttackPlayer(room, player.id, "right", 1_000)).toMatchObject({
+      ok: true,
+      defeated: true,
+    });
+    expect(tryMovePlayer(room, player.id, "right")).toEqual({ ok: true });
+    expect(tryAttackPlayer(room, player.id, "right", 1_250)).toMatchObject({
+      ok: true,
+      defeated: true,
+    });
+    expect(player).toMatchObject({
+      hp: 115,
+      maxHp: 115,
+      attack: 21,
+      defense: 4,
+      level: 2,
+      xp: 150,
+      enemiesDefeated: 2,
+    });
+    expect(toPublicPlayerState(player)).toMatchObject({
+      hp: 115,
+      maxHp: 115,
+      level: 2,
+      xp: 150,
+      status: "alive",
+    });
+  });
+
   it("clamps enemy HP and awards XP and kills once when defeated", () => {
     const room = createRoom();
     const player = createPlayer("p1", "One", { x: 1, y: 1 });
@@ -279,7 +393,7 @@ describe("authoritative multiplayer room state", () => {
     room.players.set(player.id, player);
     player.attack = 1000;
 
-    expect(tryAttackPlayer(room, player.id, "right")).toEqual({
+    expect(tryAttackPlayer(room, player.id, "right", 1_000)).toEqual({
       ok: true,
       damage: 1000,
       defeated: true,
@@ -287,7 +401,7 @@ describe("authoritative multiplayer room state", () => {
     expect(enemy).toMatchObject({ hp: 0, status: "defeated" });
     expect(player).toMatchObject({ xp: 75, enemiesDefeated: 1 });
 
-    expect(tryAttackPlayer(room, player.id, "right")).toEqual({
+    expect(tryAttackPlayer(room, player.id, "right", 1_250)).toEqual({
       ok: false,
       reason: "no-enemy",
     });

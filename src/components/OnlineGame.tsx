@@ -132,8 +132,16 @@ export default function OnlineGame() {
       return;
     }
 
+    if (
+      gameState.players.find((player) => player.id === currentPlayerId)
+        ?.status !== "alive"
+    ) {
+      stopMoving();
+      return;
+    }
+
     socket.emit("game:move", { direction });
-  }, [gameState]);
+  }, [currentPlayerId, gameState, stopMoving]);
 
   const startMoving = useCallback(
     (direction: Direction) => {
@@ -270,16 +278,19 @@ export default function OnlineGame() {
       return;
     }
 
+    if (
+      gameState.players.find((player) => player.id === currentPlayerId)
+        ?.status !== "alive"
+    ) {
+      return;
+    }
+
     socket.emit("game:attack", {
       direction: attackDirectionRef.current,
     });
   };
 
   const currentPlayer = lobby?.players.find(
-    (player) => player.id === currentPlayerId
-  );
-
-  const currentGamePlayer = gameState?.players.find(
     (player) => player.id === currentPlayerId
   );
 
@@ -400,25 +411,39 @@ export default function OnlineGame() {
           onAttack={attack}
         />
 
-        {currentGamePlayer && (
+        {gameState && gameState.players.length > 0 && (
           <div
-            aria-label="Estadísticas del jugador"
-            className="mt-3 flex flex-wrap gap-x-4 gap-y-1 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm"
+            aria-label="Estadísticas de la sala"
+            className="mt-3 grid gap-2 sm:grid-cols-2"
           >
-            <span>
-              HP: {currentGamePlayer.hp}/{currentGamePlayer.maxHp}
-            </span>
-            <span>Nivel: {currentGamePlayer.level}</span>
-            <span>XP: {currentGamePlayer.xp}</span>
-            <span>
-              Centinelas derrotados: {currentGamePlayer.enemiesDefeated}
-            </span>
-            <span>
-              Estado:{" "}
-              {currentGamePlayer.status === "alive"
-                ? "Vivo"
-                : "Derrotado"}
-            </span>
+            {gameState.players.map((player) => (
+              <div
+                key={player.id}
+                aria-label={`Estadísticas de ${player.name}`}
+                className="flex flex-wrap gap-x-4 gap-y-1 rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm"
+              >
+                <span className="w-full font-semibold text-slate-200">
+                  {player.name}
+                  {player.id === currentPlayerId ? " (tú)" : ""}
+                </span>
+                <span>
+                  HP: {player.hp}/{player.maxHp}
+                </span>
+                <span>Nivel: {player.level}</span>
+                <span>XP: {player.xp}</span>
+                <span>Centinelas derrotados: {player.enemiesDefeated}</span>
+                <span
+                  className={
+                    player.status === "alive"
+                      ? "text-emerald-300"
+                      : "font-bold text-red-300"
+                  }
+                  role="status"
+                >
+                  Estado: {player.status === "alive" ? "Vivo" : "Derrotado"}
+                </span>
+              </div>
+            ))}
           </div>
         )}
 

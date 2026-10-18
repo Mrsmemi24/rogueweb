@@ -42,7 +42,12 @@ npx prisma migrate dev --name init
 npx prisma db seed
 ```
 
-The seed replaces only records whose `playerId` starts with `seed-player-`, so rerunning it does not duplicate its sample data or remove other match history.
+The seed counts all rows in `MatchHistory` and inserts only enough sample rows
+to bring that table to 10,000, in batches of 500. It does not delete or replace
+existing records. A sequential rerun after the table reaches 10,000 rows inserts
+nothing. Do not run multiple seed processes concurrently: the seed has no
+unique marker for sample rows and its count-then-insert steps are not protected
+against concurrent writes.
 
 ## Project checks
 

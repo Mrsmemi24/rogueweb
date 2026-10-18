@@ -31,11 +31,17 @@ Sending intentions and rendering server responses keeps the room synchronized.
 
 ## Storage and identity
 
-Room state is currently in memory and disappears when the last socket leaves.
-There is no database or authentication layer. Those technologies are
-intentionally not guessed: the repository has no official requirement choosing
-a database, data model, or OAuth provider. Obtain those decisions before
-creating migrations, a large seed, accounts, or session handling.
+Prisma 7 connects to PostgreSQL through the PostgreSQL driver adapter. The
+`MatchHistory` model and initial migration exist, and the sample seed inserts
+records in batches until the table reaches 10,000 rows. The telemetry API reads
+that table, but the game server does not yet save real completed matches.
+
+The multiplayer room itself remains in memory and disappears when its last
+socket leaves. OAuth, sessions, and protected routes are not implemented:
+players currently use the server-generated `socket.id` for the active
+connection, while the display name comes from the client. A validated identity
+provider and session policy must be agreed before connecting accounts to game
+history.
 
 ## Multiplayer completion
 
@@ -43,4 +49,7 @@ The first player to reach the exit wins for the room, as confirmed by the
 project owner. If every player is defeated, the room is defeated. A terminal
 room rejects further actions and new joins. Disconnecting every player removes
 it, allowing a fresh room to be generated; an in-game restart control is not
-implemented.
+implemented. Reconnecting creates a new socket identity and does not restore
+the previous room state. The socket server currently binds to `127.0.0.1`;
+production hosting must configure a reachable interface, allowed origin,
+HTTPS/WSS, and persistent WebSocket support.

@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
+import { PrismaPg } from "@prisma/adapter-pg";
 import { PrismaClient } from "@prisma/client";
 
-const prisma = new PrismaClient();
+const connectionString = process.env.DATABASE_URL;
+
+if (!connectionString) {
+  throw new Error("DATABASE_URL no está configurada");
+}
+
+const prisma = new PrismaClient({
+  adapter: new PrismaPg({ connectionString }),
+});
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);

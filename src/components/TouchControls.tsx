@@ -64,6 +64,7 @@ export default function TouchControls() {
 
   useEffect(() => {
     const stopOnFocusLoss = () => stopMoving();
+    const stopOnGameOver = () => stopMoving();
     const stopWhenHidden = () => {
       if (document.hidden) stopMoving();
     };
@@ -71,6 +72,7 @@ export default function TouchControls() {
     window.addEventListener("pointerup", stopOnFocusLoss);
     window.addEventListener("pointercancel", stopOnFocusLoss);
     window.addEventListener("blur", stopOnFocusLoss);
+    window.addEventListener("rogueweb:game-over", stopOnGameOver);
     document.addEventListener("visibilitychange", stopWhenHidden);
 
     return () => {
@@ -78,6 +80,7 @@ export default function TouchControls() {
       window.removeEventListener("pointerup", stopOnFocusLoss);
       window.removeEventListener("pointercancel", stopOnFocusLoss);
       window.removeEventListener("blur", stopOnFocusLoss);
+      window.removeEventListener("rogueweb:game-over", stopOnGameOver);
       document.removeEventListener("visibilitychange", stopWhenHidden);
     };
   }, [stopMoving]);
@@ -95,7 +98,7 @@ export default function TouchControls() {
   ) => stopWhenPointerLeaves(event, stopMoving);
 
   return (
-    <section className="mt-4 flex items-center justify-between gap-4 md:hidden">
+    <section className="touch-controls mt-4 items-center justify-between gap-4">
       <div
         className="grid grid-cols-3 gap-1"
         aria-label="Controles de movimiento"

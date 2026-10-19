@@ -9,6 +9,7 @@ import {
 } from "react";
 import dynamic from "next/dynamic";
 import { io, type Socket } from "socket.io-client";
+import TouchControls from "./TouchControls";
 
 const AuthoritativeCanvas = dynamic(
   () => import("./AuthoritativeCanvas"),
@@ -23,6 +24,15 @@ const AuthoritativeCanvas = dynamic(
 );
 
 type Direction = "up" | "down" | "left" | "right";
+
+function isDirection(value: unknown): value is Direction {
+  return (
+    value === "up" ||
+    value === "down" ||
+    value === "left" ||
+    value === "right"
+  );
+}
 
 type LobbyPlayer = {
   id: string;
@@ -110,6 +120,7 @@ export default function OnlineGame() {
   const attackDirectionRef = useRef<Direction>("down");
   const movementIntervalRef = useRef<number | null>(null);
   const moveRef = useRef<(direction: Direction) => void>(() => {});
+  const attackRef = useRef<() => void>(() => {});
   const joinedRoomRef = useRef<{
     roomId: string;
     playerName: string;
@@ -194,10 +205,6 @@ export default function OnlineGame() {
   );
 
   useEffect(() => {
-    moveRef.current = move;
-  }, [move]);
-
-  useEffect(() => {
     const player = gameState?.players.find(
       (candidate) => candidate.id === currentPlayerId
     );
@@ -273,6 +280,11 @@ export default function OnlineGame() {
     };
 
     const stopOnFocusLoss = () => stopMoving();
+    const onVirtualMove = (event: Event) => {
+      const direction = (event as CustomEvent<unknown>).detail;
+      if (isDirection(direction)) moveRef.current(direction);
+    };
+    const onVirtualAttack = () => attackRef.current();
     const stopWhenHidden = () => {
       if (document.hidden) stopMoving();
     };
@@ -284,6 +296,8 @@ export default function OnlineGame() {
     socket.on("lobby:joined", onLobbyJoined);
     socket.on("game:state", onGameState);
     socket.on("app:error", onAppError);
+    window.addEventListener("rogueweb:move", onVirtualMove);
+    window.addEventListener("rogueweb:attack", onVirtualAttack);
     window.addEventListener("pointerup", stopOnFocusLoss);
     window.addEventListener("pointercancel", stopOnFocusLoss);
     window.addEventListener("blur", stopOnFocusLoss);
@@ -299,6 +313,8 @@ export default function OnlineGame() {
       socket.off("lobby:joined", onLobbyJoined);
       socket.off("game:state", onGameState);
       socket.off("app:error", onAppError);
+      window.removeEventListener("rogueweb:move", onVirtualMove);
+      window.removeEventListener("rogueweb:attack", onVirtualAttack);
       window.removeEventListener("pointerup", stopOnFocusLoss);
       window.removeEventListener("pointercancel", stopOnFocusLoss);
       window.removeEventListener("blur", stopOnFocusLoss);
@@ -348,6 +364,11 @@ export default function OnlineGame() {
       direction: attackDirectionRef.current,
     });
   };
+
+  useEffect(() => {
+    moveRef.current = move;
+    attackRef.current = attack;
+  });
 
   const currentPlayer = lobby?.players.find(
     (player) => player.id === currentPlayerId
@@ -498,6 +519,7 @@ export default function OnlineGame() {
           onMove={move}
           onAttack={attack}
         />
+        <TouchControls />
 
         {gameState?.status !== "active" &&
           gameState?.hostPlayerId === currentPlayerId && (

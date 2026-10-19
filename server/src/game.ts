@@ -415,6 +415,22 @@ export function tryMovePlayer(
     return { ok: false, reason: "game-over" };
   }
 
+  const currentRow = room.dungeon.map[player.y];
+  if (
+    !Number.isInteger(player.x) ||
+    !Number.isInteger(player.y) ||
+    player.y < 0 ||
+    player.y >= room.dungeon.map.length ||
+    player.x < 0 ||
+    player.x >= (currentRow?.length ?? 0)
+  ) {
+    return { ok: false, reason: "outside-map" };
+  }
+
+  if (currentRow?.[player.x] !== ".") {
+    return { ok: false, reason: "wall" };
+  }
+
   if (
     player.lastMoveAt !== undefined &&
     now - player.lastMoveAt < MOVE_COOLDOWN_MS

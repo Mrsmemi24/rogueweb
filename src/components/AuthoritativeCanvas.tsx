@@ -58,6 +58,17 @@ type EnemyView = {
   label: Phaser.GameObjects.Text;
 };
 
+function isWalkablePosition(map: string[], x: number, y: number) {
+  return (
+    Number.isInteger(x) &&
+    Number.isInteger(y) &&
+    y >= 0 &&
+    y < map.length &&
+    x >= 0 &&
+    map[y]?.[x] === "."
+  );
+}
+
 export default function AuthoritativeCanvas({
   gameState,
   currentPlayerId,
@@ -315,6 +326,12 @@ export default function AuthoritativeCanvas({
           this.mapSignature = signature;
         }
 
+        const validExit = isWalkablePosition(
+          state.map,
+          state.exit.x,
+          state.exit.y
+        );
+
         this.exitMarker
           .setPosition(
             this.offsetX +
@@ -325,10 +342,14 @@ export default function AuthoritativeCanvas({
               this.tileSize / 2
           )
           .setSize(this.tileSize * 0.55, this.tileSize * 0.55)
-          .setVisible(true);
+          .setVisible(validExit);
 
         const enemyIds = new Set(
-          state.enemies.map((enemy) => enemy.id)
+          state.enemies
+            .filter((enemy) =>
+              isWalkablePosition(state.map, enemy.x, enemy.y)
+            )
+            .map((enemy) => enemy.id)
         );
 
         for (const [id, view] of this.enemyViews) {
@@ -340,6 +361,8 @@ export default function AuthoritativeCanvas({
         }
 
         for (const enemy of state.enemies) {
+          if (!isWalkablePosition(state.map, enemy.x, enemy.y)) continue;
+
           let view = this.enemyViews.get(enemy.id);
 
           if (!view) {
@@ -384,7 +407,11 @@ export default function AuthoritativeCanvas({
         }
 
         const activeIds = new Set(
-          state.players.map((player) => player.id)
+          state.players
+            .filter((player) =>
+              isWalkablePosition(state.map, player.x, player.y)
+            )
+            .map((player) => player.id)
         );
 
         for (const [id, view] of this.playerViews) {
@@ -397,6 +424,8 @@ export default function AuthoritativeCanvas({
         }
 
         for (const player of state.players) {
+          if (!isWalkablePosition(state.map, player.x, player.y)) continue;
+
           let view = this.playerViews.get(player.id);
 
           if (!view) {

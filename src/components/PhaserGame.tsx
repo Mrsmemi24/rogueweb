@@ -42,6 +42,8 @@ export default function PhaserGame() {
 
     if (!host) return;
 
+    let pixelRatio = Math.min(Math.max(window.devicePixelRatio || 1, 1), 2);
+
     class DungeonScene extends Phaser.Scene {
       private cursors?: Phaser.Types.Input.Keyboard.CursorKeys;
       private wasd?: Record<string, Phaser.Input.Keyboard.Key>;
@@ -54,12 +56,14 @@ export default function PhaserGame() {
       private exitMarker!: Phaser.GameObjects.Rectangle;
       private statusText!: Phaser.GameObjects.Text;
       private hudText!: Phaser.GameObjects.Text;
+      private gameOverOverlay!: Phaser.GameObjects.Container;
+      private gameOverStatus!: Phaser.GameObjects.Text;
 
       private maze: Maze = [];
       private enemies: VisibleEnemy[] = [];
       private playerState: PlayerState = createPlayerState();
 
-      private readonly tileSize = 32;
+      private tileSize = 32;
 
       private columns = 1;
       private rows = 1;
@@ -72,6 +76,12 @@ export default function PhaserGame() {
 
       private completed = false;
       private dead = false;
+      private runId = crypto.randomUUID();
+      private runStartedAt = Date.now();
+
+      private readonly preventTouchGesture = (event: TouchEvent) => {
+        event.preventDefault();
+      };
 
       private readonly handleFocusLoss = () => {
         this.input.keyboard?.resetKeys();
@@ -155,6 +165,48 @@ export default function PhaserGame() {
           .setOrigin(1, 0)
           .setDepth(10)
           .setScrollFactor(0);
+
+        const overlayBackground = this.add
+          .rectangle(0, 0, 320, 190, 0x020617, 0.96)
+          .setStrokeStyle(2, 0x475569);
+        const gameOverTitle = this.add
+          .text(0, -55, "FIN DE LA PARTIDA", {
+            fontFamily: "monospace",
+            fontSize: "22px",
+            color: "#fca5a5",
+            fontStyle: "bold",
+          })
+          .setOrigin(0.5);
+        this.gameOverStatus = this.add
+          .text(0, -15, "Muerte permanente", {
+            fontFamily: "monospace",
+            fontSize: "13px",
+            color: "#cbd5e1",
+            align: "center",
+          })
+          .setOrigin(0.5);
+        const restartButton = this.add
+          .text(0, 48, "JUGAR DE NUEVO", {
+            fontFamily: "monospace",
+            fontSize: "16px",
+            color: "#020617",
+            backgroundColor: "#67e8f9",
+            padding: { x: 16, y: 10 },
+          })
+          .setOrigin(0.5)
+          .setInteractive({ useHandCursor: true });
+        restartButton.on("pointerdown", this.startNewRun, this);
+        this.gameOverOverlay = this.add
+          .container(0, 0, [
+            overlayBackground,
+            gameOverTitle,
+            this.gameOverStatus,
+            restartButton,
+          ])
+          .setDepth(20)
+          .setScrollFactor(0)
+          .setVisible(false);
+
         window.addEventListener("rogueweb:move", this.handleVirtualMove);
         window.addEventListener("rogueweb:attack", this.handleVirtualAttack);
         window.addEventListener("blur", this.handleFocusLoss);
@@ -162,11 +214,23 @@ export default function PhaserGame() {
           "visibilitychange",
           this.handleVisibilityChange
         );
+        host.addEventListener("touchstart", this.preventTouchGesture, {
+          passive: false,
+        });
+        host.addEventListener("touchmove", this.preventTouchGesture, {
+          passive: false,
+        });
+        host.addEventListener("touchend", this.preventTouchGesture, {
+          passive: false,
+        });
 
         this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
           window.removeEventListener("rogueweb:move", this.handleVirtualMove);
           window.removeEventListener("rogueweb:attack", this.handleVirtualAttack);
           this.removeFocusListeners();
+          host.removeEventListener("touchstart", this.preventTouchGesture);
+          host.removeEventListener("touchmove", this.preventTouchGesture);
+          host.removeEventListener("touchend", this.preventTouchGesture);
         });
         this.events.once(
           Phaser.Scenes.Events.DESTROY,
@@ -282,29 +346,32 @@ export default function PhaserGame() {
       }
 
       private drawBoard(width: number, height: number) {
-        let nextColumns = Math.max(
-          5,
-          Math.floor(width / this.tileSize)
-        );
+        const logicalWidth = width / pixelRatio;
+        const logicalHeight = height / pixelRatio;
 
-        let nextRows = Math.max(
-          5,
-          Math.floor(height / this.tileSize)
-        );
+        if (this.columns === 1 && this.rows === 1) {
+          let nextColumns = Math.max(5, Math.floor(logicalWidth / 32));
+          let nextRows = Math.max(5, Math.floor(logicalHeight / 32));
 
-        if (nextColumns % 2 === 0) nextColumns--;
-        if (nextRows % 2 === 0) nextRows--;
+          if (nextColumns % 2 === 0) nextColumns--;
+          if (nextRows % 2 === 0) nextRows--;
 
-        const dimensionsChanged =
-          nextColumns !== this.columns ||
-          nextRows !== this.rows;
-
-        this.columns = nextColumns;
-        this.rows = nextRows;
-
-        if (dimensionsChanged) {
+          this.columns = nextColumns;
+          this.rows = nextRows;
           this.startNewRun();
         }
+
+        this.tileSize = Math.max(
+          8,
+          Math.min(
+            48,
+            Math.floor(logicalWidth / this.columns),
+            Math.floor(logicalHeight / this.rows)
+          )
+        );
+        this.cameras.main
+          .setZoom(pixelRatio)
+          .centerOn(logicalWidth / 2, logicalHeight / 2);
 
         this.grid.clear();
 
@@ -347,7 +414,8 @@ export default function PhaserGame() {
           this.exitY * this.tileSize + this.tileSize / 2
         );
 
-        this.hudText.setPosition(width - 10, 36);
+        this.hudText.setPosition(logicalWidth - 10, 36);
+        this.positionGameOverOverlay(logicalWidth, logicalHeight);
 
         for (const enemy of this.enemies) {
           this.positionEnemy(enemy);
@@ -380,6 +448,10 @@ export default function PhaserGame() {
 
         this.completed = false;
         this.dead = false;
+        this.runId = crypto.randomUUID();
+        this.runStartedAt = Date.now();
+        this.gameOverStatus.setText("Muerte permanente");
+        this.gameOverOverlay.setVisible(false);
 
         this.clearEnemies();
         this.spawnEnemies();
@@ -720,11 +792,7 @@ export default function PhaserGame() {
             this.updateHud();
 
             if (this.playerState.hp <= 0) {
-              this.dead = true;
-
-              this.statusText.setText(
-                "HAS MUERTO. Muerte permanente: partida terminada."
-              );
+              this.finishRun();
 
               break;
             }
@@ -750,23 +818,111 @@ export default function PhaserGame() {
       private handleResize(gameSize: Phaser.Structs.Size) {
         this.drawBoard(gameSize.width, gameSize.height);
       }
+
+      private positionGameOverOverlay(
+        width = this.scale.width / pixelRatio,
+        height = this.scale.height / pixelRatio
+      ) {
+        this.gameOverOverlay.setPosition(width / 2, height / 2);
+      }
+
+      private finishRun() {
+        if (this.dead) return;
+
+        this.dead = true;
+        this.lastMoveDirection = undefined;
+        this.lastMoveAt = 0;
+        this.statusText.setText("Muerte permanente: partida terminada.");
+        this.gameOverStatus.setText("Guardando resultado...");
+        this.positionGameOverOverlay();
+        this.gameOverOverlay.setVisible(true);
+        window.dispatchEvent(new Event("rogueweb:game-over"));
+        void this.persistRunTelemetry();
+      }
+
+      private async persistRunTelemetry() {
+        const runId = this.runId;
+
+        try {
+          const response = await fetch("/api/telemetry", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "same-origin",
+            body: JSON.stringify({
+              matchId: this.runId,
+              durationSeconds: Math.max(
+                0,
+                Math.floor((Date.now() - this.runStartedAt) / 1000)
+              ),
+              levelReached: this.playerState.level,
+              enemiesDefeated: this.playerState.enemiesDefeated,
+              result: "defeat",
+            }),
+            signal: AbortSignal.timeout(5_000),
+          });
+
+          if (response.status === 401) {
+            if (this.runId !== runId) return;
+            this.gameOverStatus.setText(
+              "Inicia sesión para guardar la partida."
+            );
+            return;
+          }
+
+          if (!response.ok) throw new Error("Telemetry save failed");
+
+          if (this.runId !== runId) return;
+          this.gameOverStatus.setText("Resultado guardado.");
+        } catch {
+          if (this.runId !== runId) return;
+          this.gameOverStatus.setText("No se pudo guardar el resultado.");
+        }
+      }
     }
+
+    const initialWidth = host.clientWidth || 800;
+    const initialHeight = host.clientHeight || 440;
+    const initialRenderWidth = Math.floor(initialWidth * pixelRatio);
+    const initialRenderHeight = Math.floor(initialHeight * pixelRatio);
 
     const game = new Phaser.Game({
       type: Phaser.CANVAS,
       parent: host,
+      canvasStyle: "display:block;width:100%;height:100%;touch-action:none;",
       backgroundColor: "#0b1120",
-      width: 800,
-      height: 440,
+      width: initialRenderWidth,
+      height: initialRenderHeight,
       scale: {
         mode: Phaser.Scale.RESIZE,
-        width: 800,
-        height: 440,
+        width: initialRenderWidth,
+        height: initialRenderHeight,
       },
+      fps: { target: 60, limit: 60 },
       scene: [DungeonScene],
     });
 
+    const resizeCanvas = () => {
+      const width = Math.floor(host.clientWidth);
+      const height = Math.floor(host.clientHeight);
+
+      if (width <= 0 || height <= 0) return;
+
+      pixelRatio = Math.min(Math.max(window.devicePixelRatio || 1, 1), 2);
+      game.scale.resize(
+        Math.floor(width * pixelRatio),
+        Math.floor(height * pixelRatio)
+      );
+      game.canvas.style.width = `${width}px`;
+      game.canvas.style.height = `${height}px`;
+    };
+
+    const resizeObserver = new ResizeObserver(resizeCanvas);
+    resizeObserver.observe(host);
+    window.addEventListener("resize", resizeCanvas);
+
     return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", resizeCanvas);
       game.destroy(true);
     };
   }, []);
@@ -775,7 +931,7 @@ export default function PhaserGame() {
     <div
       ref={hostRef}
       aria-label="Mazmorra de RogueWeb con combate"
-      className="h-[440px] w-full overflow-hidden rounded-xl border border-slate-700 bg-slate-950"
+      className="solo-game-canvas h-[440px] w-full overflow-hidden rounded-xl border border-slate-700 bg-slate-950"
     />
   );
 }

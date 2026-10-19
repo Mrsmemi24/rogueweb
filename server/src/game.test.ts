@@ -155,6 +155,23 @@ describe("authoritative multiplayer room state", () => {
     ).toBe(false);
   });
 
+  it("rejects inventory data and malformed payloads in player intents", () => {
+    expect(
+      MoveIntentSchema.safeParse({
+        direction: "right",
+        inventory: ["potion"],
+      }).success
+    ).toBe(false);
+    expect(
+      AttackIntentSchema.safeParse({
+        direction: "left",
+        inventory: { items: ["potion"] },
+      }).success
+    ).toBe(false);
+    expect(MoveIntentSchema.safeParse(null).success).toBe(false);
+    expect(AttackIntentSchema.safeParse({ direction: 4 }).success).toBe(false);
+  });
+
   it("serializes public player stats without lobby or server-only fields", () => {
     const room = createRoom();
     const player = createPlayer("p1", "One", { x: 1, y: 1 });
@@ -595,6 +612,24 @@ describe("authoritative multiplayer room state", () => {
     });
     expect(room.players.get("p1")).toMatchObject(position);
   });
+
+  it.each([
+    ["a wall", { x: 0, y: 1 }, "right", "wall"],
+    ["a non-integer coordinate", { x: 1.5, y: 1 }, "right", "outside-map"],
+    ["an out-of-bounds coordinate", { x: -1, y: 1 }, "right", "outside-map"],
+  ] as const)(
+    "rejects movement from %s",
+    (_case, position, direction, reason) => {
+      const room = createRoom();
+      room.players.set("p1", createPlayer("p1", "One", position));
+
+      expect(tryMovePlayer(room, "p1", direction)).toEqual({
+        ok: false,
+        reason,
+      });
+      expect(room.players.get("p1")).toMatchObject(position);
+    }
+  );
 
   it("rejects invalid directions and missing players", () => {
     const room = createRoom();

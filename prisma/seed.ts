@@ -14,15 +14,19 @@ const prisma = new PrismaClient({ adapter });
 
 async function main() {
   const target = 10_000;
-  const current = await prisma.matchHistory.count();
+  const current = await prisma.matchHistory.count({
+    where: { playerId: { startsWith: "seed-player-" } },
+  });
   const missing = Math.max(0, target - current);
 
   if (missing === 0) {
-    console.log(`Ya existen ${current} partidas. No se insertaron registros.`);
+    console.log(`Ya existen ${current} partidas de prueba. No se insertaron registros.`);
     return;
   }
 
-  console.log(`Existen ${current} partidas. Insertando ${missing} registros...`);
+  console.log(
+    `Existen ${current} partidas de prueba. Insertando ${missing} registros...`
+  );
 
   const results = ["victory", "defeat", "abandoned"] as const;
 
@@ -49,8 +53,13 @@ async function main() {
     });
   }
 
-  const total = await prisma.matchHistory.count();
-  console.log(`Seed terminado. Total de partidas: ${total}`);
+  const [seeded, total] = await Promise.all([
+    prisma.matchHistory.count({
+      where: { playerId: { startsWith: "seed-player-" } },
+    }),
+    prisma.matchHistory.count(),
+  ]);
+  console.log(`Seed terminado. Partidas de prueba: ${seeded}. Total: ${total}.`);
 }
 
 main()

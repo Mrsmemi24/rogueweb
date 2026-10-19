@@ -58,112 +58,143 @@ function parsePositiveInteger(value: string | null, fallback: number, max: numbe
   return Number.isSafeInteger(parsed) && parsed <= max ? parsed : null;
 }
 
+const MAX_PAGE_OFFSET = 10_000;
+
 export async function GET(request: NextRequest) {
-  const session = await auth();
-  const playerId = session?.user?.id;
+  try {
+    const session = await auth();
+    const playerId = session?.user?.id;
 
-  if (!playerId) {
-    return Response.json({ error: "Authentication required" }, { status: 401 });
-  }
+    if (!playerId) {
+      return Response.json({ error: "Authentication required" }, { status: 401 });
+    }
 
-  const { searchParams } = new URL(request.url);
-  const page = parsePositiveInteger(searchParams.get("page"), 1, 100_000);
-  const limit = parsePositiveInteger(searchParams.get("limit"), 20, 50);
+    const { searchParams } = new URL(request.url);
+    const page = parsePositiveInteger(searchParams.get("page"), 1, 100_000);
+    const limit = parsePositiveInteger(searchParams.get("limit"), 20, 50);
+    const maxPage = limit === null ? null : Math.floor(MAX_PAGE_OFFSET / limit) + 1;
 
-  if (page === null || limit === null) {
-    return Response.json({ error: "Invalid pagination parameters" }, { status: 400 });
-  }
+    if (
+      page === null ||
+      limit === null ||
+      maxPage === null ||
+      page > maxPage
+    ) {
+      return Response.json(
+        { error: "Invalid pagination parameters" },
+        { status: 400 }
+      );
+    }
 
-  const where = { playerId };
-  const prisma = getPrismaClient();
-  const [data, total] = await Promise.all([
-    prisma.matchHistory.findMany({
-      where,
-      skip: (page - 1) * limit,
-      take: limit,
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        playerName: true,
-        levelReached: true,
-        enemiesDefeated: true,
-        durationSeconds: true,
-        result: true,
-        createdAt: true,
+    const where = { playerId };
+    const prisma = getPrismaClient();
+    const [data, total] = await Promise.all([
+      prisma.matchHistory.findMany({
+        where,
+        skip: (page - 1) * limit,
+        take: limit,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+        select: {
+          id: true,
+          playerName: true,
+          levelReached: true,
+          enemiesDefeated: true,
+          durationSeconds: true,
+          result: true,
+          createdAt: true,
+        },
+      }),
+      prisma.matchHistory.count({ where }),
+    ]);
+
+    return Response.json({
+      data,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.min(Math.ceil(total / limit), maxPage),
       },
-    }),
-    prisma.matchHistory.count({ where }),
-  ]);
-
-  return Response.json({
-    data,
-    pagination: {
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit),
-    },
-  });
+    });
+  } catch (error) {
+    console.error(
+      `Could not load match telemetry (${error instanceof Error ? error.name : "UnknownError"}).`
+    );
+    return Response.json(
+      { error: "Could not load match telemetry" },
+      { status: 503 }
+    );
+  }
 }
 
 export async function POST(request: NextRequest) {
-  const session = await auth();
-  const playerId = session?.user?.id;
-
-  if (!playerId) {
-    return Response.json({ error: "Authentication required" }, { status: 401 });
-  }
-
-  const origin = request.headers.get("origin");
-  if (origin !== new URL(request.url).origin) {
-    return Response.json({ error: "Invalid request origin" }, { status: 403 });
-  }
-
-  if (!request.headers.get("content-type")?.startsWith("application/json")) {
-    return Response.json({ error: "JSON content type required" }, { status: 415 });
-  }
-
-  const body = await readLimitedJson(request);
-  if (!body.ok && body.reason === "too-large") {
-    return Response.json({ error: "Request body is too large" }, { status: 413 });
-  }
-  if (!body.ok) {
-    return Response.json({ error: "Invalid JSON body" }, { status: 400 });
-  }
-
-  const parsed = SoloMatchSchema.safeParse(body.value);
-  if (!parsed.success) {
-    return Response.json({ error: "Invalid match record" }, { status: 400 });
-  }
-
-  const playerName =
-    session.user?.name?.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 20) ||
-    "Explorador";
-
   try {
-    const created = await getPrismaClient().matchHistory.createMany({
-      data: [
-        {
-          matchId: parsed.data.matchId,
-          playerId,
-          playerName,
-          levelReached: parsed.data.levelReached,
-          enemiesDefeated: parsed.data.enemiesDefeated,
-          durationSeconds: parsed.data.durationSeconds,
-          inventory: { items: [] },
-          result: parsed.data.result,
-        },
-      ],
-      skipDuplicates: true,
-    });
+    const session = await auth();
+    const playerId = session?.user?.id;
 
-    return Response.json({ saved: created.count === 1 });
+    if (!playerId) {
+      return Response.json({ error: "Authentication required" }, { status: 401 });
+    }
+
+    const origin = request.headers.get("origin");
+    if (origin !== new URL(request.url).origin) {
+      return Response.json({ error: "Invalid request origin" }, { status: 403 });
+    }
+
+    if (!request.headers.get("content-type")?.startsWith("application/json")) {
+      return Response.json({ error: "JSON content type required" }, { status: 415 });
+    }
+
+    const body = await readLimitedJson(request);
+    if (!body.ok && body.reason === "too-large") {
+      return Response.json({ error: "Request body is too large" }, { status: 413 });
+    }
+    if (!body.ok) {
+      return Response.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    const parsed = SoloMatchSchema.safeParse(body.value);
+    if (!parsed.success) {
+      return Response.json({ error: "Invalid match record" }, { status: 400 });
+    }
+
+    const playerName =
+      session.user?.name?.replace(/[\u0000-\u001f\u007f]/g, "").trim().slice(0, 20) ||
+      "Explorador";
+
+    try {
+      const created = await getPrismaClient().matchHistory.createMany({
+        data: [
+          {
+            matchId: parsed.data.matchId,
+            playerId,
+            playerName,
+            levelReached: parsed.data.levelReached,
+            enemiesDefeated: parsed.data.enemiesDefeated,
+            durationSeconds: parsed.data.durationSeconds,
+            inventory: { items: [] },
+            result: parsed.data.result,
+          },
+        ],
+        skipDuplicates: true,
+      });
+
+      return Response.json({ saved: created.count === 1 });
+    } catch (error) {
+      console.error(
+        `Could not save solo match ${parsed.data.matchId} (${error instanceof Error ? error.name : "UnknownError"}).`
+      );
+      return Response.json(
+        { error: "Could not save match telemetry" },
+        { status: 503 }
+      );
+    }
   } catch (error) {
     console.error(
-      `Could not save solo match ${parsed.data.matchId} (${error instanceof Error ? error.name : "UnknownError"}).`
+      `Could not process match telemetry (${error instanceof Error ? error.name : "UnknownError"}).`
     );
     return Response.json(
-      { error: "Could not save match telemetry" },
+      { error: "Could not process match telemetry" },
       { status: 503 }
     );
   }

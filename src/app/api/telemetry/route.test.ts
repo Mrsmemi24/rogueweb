@@ -60,6 +60,7 @@ describe("GET /api/telemetry", () => {
         where: { playerId: "github:viewer" },
         skip: 5,
         take: 5,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
         select: {
           id: true,
           playerName: true,
@@ -103,6 +104,56 @@ describe("GET /api/telemetry", () => {
       expect(findMany).not.toHaveBeenCalled();
     }
   );
+
+  it("rejects offsets beyond the bounded history window", async () => {
+    auth.mockResolvedValue({ user: { id: "github:viewer" } });
+
+    const response = await GET(
+      new NextRequest("http://localhost/api/telemetry?page=202&limit=50")
+    );
+
+    expect(response.status).toBe(400);
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
+  it("reports no pages beyond the bounded history window", async () => {
+    auth.mockResolvedValue({ user: { id: "github:viewer" } });
+    count.mockResolvedValue(12_000);
+
+    const response = await GET(
+      new NextRequest("http://localhost/api/telemetry?page=1&limit=50")
+    );
+
+    expect((await response.json()).pagination.totalPages).toBe(201);
+  });
+
+  it("returns a JSON service error when authentication or a query fails", async () => {
+    auth.mockRejectedValueOnce(new Error("private auth detail"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const authResponse = await GET(
+        new NextRequest("http://localhost/api/telemetry")
+      );
+      expect(authResponse.status).toBe(503);
+      expect(await authResponse.json()).toEqual({
+        error: "Could not load match telemetry",
+      });
+
+      auth.mockResolvedValue({ user: { id: "github:viewer" } });
+      findMany.mockRejectedValueOnce(new Error("private database detail"));
+      const databaseResponse = await GET(
+        new NextRequest("http://localhost/api/telemetry")
+      );
+      expect(databaseResponse.status).toBe(503);
+      expect(await databaseResponse.json()).toEqual({
+        error: "Could not load match telemetry",
+      });
+      expect(log.mock.calls.flat().join(" ")).not.toContain("private");
+    } finally {
+      log.mockRestore();
+    }
+  });
 });
 
 describe("POST /api/telemetry", () => {
@@ -245,6 +296,32 @@ describe("POST /api/telemetry", () => {
         error: "Could not save match telemetry",
       });
       expect(log.mock.calls[0][0]).not.toContain("private database detail");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("returns a JSON fallback when authentication throws", async () => {
+    auth.mockRejectedValue(new Error("private auth detail"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      const response = await POST(
+        new NextRequest("http://localhost/api/telemetry", {
+          method: "POST",
+          body: JSON.stringify(matchRecord),
+          headers: {
+            "content-type": "application/json",
+            origin: "http://localhost",
+          },
+        })
+      );
+
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        error: "Could not process match telemetry",
+      });
+      expect(log.mock.calls.flat().join(" ")).not.toContain("private");
     } finally {
       log.mockRestore();
     }

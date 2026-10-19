@@ -18,7 +18,7 @@ model MatchHistory {
   result          String   // "victory" | "defeat" | "abandoned"
   createdAt       DateTime @default(now())
 
-  @@index([playerId])
+  @@index([playerId, createdAt(sort: Desc), id(sort: Desc)])
   @@index([createdAt])
   @@index([levelReached])
   @@unique([matchId, playerId])

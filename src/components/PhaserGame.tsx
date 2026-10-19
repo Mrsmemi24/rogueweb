@@ -42,6 +42,8 @@ export default function PhaserGame() {
 
     if (!host) return;
 
+    const hostElement: HTMLDivElement = host;
+
     let pixelRatio = Math.min(Math.max(window.devicePixelRatio || 1, 1), 2);
 
     class DungeonScene extends Phaser.Scene {
@@ -214,13 +216,13 @@ export default function PhaserGame() {
           "visibilitychange",
           this.handleVisibilityChange
         );
-        host.addEventListener("touchstart", this.preventTouchGesture, {
+        hostElement.addEventListener("touchstart", this.preventTouchGesture, {
           passive: false,
         });
-        host.addEventListener("touchmove", this.preventTouchGesture, {
+        hostElement.addEventListener("touchmove", this.preventTouchGesture, {
           passive: false,
         });
-        host.addEventListener("touchend", this.preventTouchGesture, {
+        hostElement.addEventListener("touchend", this.preventTouchGesture, {
           passive: false,
         });
 
@@ -228,9 +230,9 @@ export default function PhaserGame() {
           window.removeEventListener("rogueweb:move", this.handleVirtualMove);
           window.removeEventListener("rogueweb:attack", this.handleVirtualAttack);
           this.removeFocusListeners();
-          host.removeEventListener("touchstart", this.preventTouchGesture);
-          host.removeEventListener("touchmove", this.preventTouchGesture);
-          host.removeEventListener("touchend", this.preventTouchGesture);
+          hostElement.removeEventListener("touchstart", this.preventTouchGesture);
+          hostElement.removeEventListener("touchmove", this.preventTouchGesture);
+          hostElement.removeEventListener("touchend", this.preventTouchGesture);
         });
         this.events.once(
           Phaser.Scenes.Events.DESTROY,
@@ -880,14 +882,14 @@ export default function PhaserGame() {
       }
     }
 
-    const initialWidth = host.clientWidth || 800;
-    const initialHeight = host.clientHeight || 440;
+    const initialWidth = hostElement.clientWidth || 800;
+    const initialHeight = hostElement.clientHeight || 440;
     const initialRenderWidth = Math.floor(initialWidth * pixelRatio);
     const initialRenderHeight = Math.floor(initialHeight * pixelRatio);
 
     const game = new Phaser.Game({
       type: Phaser.CANVAS,
-      parent: host,
+      parent: hostElement,
       canvasStyle: "display:block;width:100%;height:100%;touch-action:none;",
       backgroundColor: "#0b1120",
       width: initialRenderWidth,
@@ -902,8 +904,8 @@ export default function PhaserGame() {
     });
 
     const resizeCanvas = () => {
-      const width = Math.floor(host.clientWidth);
-      const height = Math.floor(host.clientHeight);
+      const width = Math.floor(hostElement.clientWidth);
+      const height = Math.floor(hostElement.clientHeight);
 
       if (width <= 0 || height <= 0) return;
 
@@ -917,7 +919,7 @@ export default function PhaserGame() {
     };
 
     const resizeObserver = new ResizeObserver(resizeCanvas);
-    resizeObserver.observe(host);
+    resizeObserver.observe(hostElement);
     window.addEventListener("resize", resizeCanvas);
 
     return () => {
